@@ -21,29 +21,33 @@ Week  1  2  3  4  5  6  7  8  9  10  11  12  13  14
 
 ## Milestone 1: Foundation (Weeks 1–3)
 
-> **Goal:** Establish the monorepo, define the core schema in code (Zod), and set up the adapter interface.
+> **Goal:** Establish the monorepo, define the core schema in code (Zod), set up the adapter interface, and ship the Quick Start example.
 
 ### Tasks
 
 | # | Task | Package | Acceptance Criteria |
 |---|------|---------|---------------------|
-| 1.1 | Initialize monorepo | root | pnpm workspace, Turborepo, Biome, shared tsconfig. `pnpm build` and `pnpm test` work from root. |
-| 1.2 | Implement HippoTask Zod schema | `@hippotask/core` | All types from SCHEMA.md defined as Zod schemas. TS types auto-inferred. |
-| 1.3 | Implement HippoProject Zod schema | `@hippotask/core` | Project schema with validation. |
-| 1.4 | Implement supporting types | `@hippotask/core` | HippoPerson, HippoCustomField, TaskQuery, PaginatedResult, TaskChangeEvent. |
-| 1.5 | Validation utilities | `@hippotask/core` | `validate(task)` returns typed Result. Business rules enforced (date ordering, non-empty title, etc.). |
+| 1.1 | Initialize monorepo | root | pnpm workspace, Turborepo, Biome, shared tsconfig (`strict: true` + all strict flags per ENGINEERING.md). `pnpm build` and `pnpm test` work from root. |
+| 1.2 | Implement HippoTask Zod schema (TDD) | `@hippotask/core` | **Tests written first.** All types from SCHEMA.md defined as Zod schemas. TS types auto-inferred. ≥90% coverage. |
+| 1.3 | Implement HippoProject Zod schema (TDD) | `@hippotask/core` | **Tests written first.** Project schema with validation. |
+| 1.4 | Implement supporting types (TDD) | `@hippotask/core` | HippoPerson, HippoCustomField, TaskQuery, PaginatedResult, TaskChangeEvent. |
+| 1.5 | Validation utilities (TDD) | `@hippotask/core` | `validate(task)` returns typed `Result<HippoTask, ValidationError>`. `createTask(input)` with smart defaults. Business rules enforced. Helpful error messages (per ENGINEERING.md §7). |
 | 1.6 | Utility functions | `@hippotask/core` | UUIDv7 generation, ISO 8601 helpers, deep merge for updates. |
-| 1.7 | JSON Schema export | `@hippotask/core` | `hippo-task.schema.json` and `hippo-project.schema.json` generated from Zod via `zod-to-json-schema`. Committed and auto-generated on build. |
-| 1.8 | Adapter interface definition | `@hippotask/adapter-common` | `HippoAdapter<T>` interface, `AdapterCapabilities`, `StatusMap`, `PriorityMap` types. |
-| 1.9 | Shared adapter utilities | `@hippotask/adapter-common` | `BaseFieldMapper`, rate limiter (token bucket), retry with backoff, simple TTL cache. |
-| 1.10 | Unit test suite | `@hippotask/core` | >90% coverage on schema validation. Edge cases tested (empty strings, bad dates, invalid enums). |
-| 1.11 | CI pipeline | root | GitHub Actions workflow: lint (Biome) → test (Vitest) → build (tsup) on every PR. |
+| 1.7 | JSON Schema export | `@hippotask/core` | `hippo-task.schema.json` and `hippo-project.schema.json` generated from Zod via `zod-to-json-schema`. Snapshot tests catch unintended changes. |
+| 1.8 | Adapter interface definition | `@hippotask/adapter-common` | `HippoAdapter<T>` interface, `AdapterCapabilities`, `StatusMap`, `PriorityMap` types. Follows ISP — optional methods are optional. |
+| 1.9 | Shared adapter utilities (TDD) | `@hippotask/adapter-common` | `BaseFieldMapper`, rate limiter (token bucket), retry with backoff, simple TTL cache. All with tests. |
+| 1.10 | Quick Start example | `examples/quick-start` | Standalone project. `npm install && npm start` works. Demonstrates `createTask`, `validate`, JSON Schema. See [EXAMPLES.md](./EXAMPLES.md). |
+| 1.11 | CI pipeline | root | GitHub Actions: lint (Biome) → typecheck (tsc) → test (Vitest) → build (tsup) → bundle size check (size-limit) on every PR. |
+| 1.12 | Provider Scorecard (static) | `docs/` | Machine-readable `scorecard.json` + Markdown table from PROVIDER_SCORECARD.md. |
 
 ### Exit Criteria
 - `pnpm install && pnpm build && pnpm test` passes cleanly
-- A HippoTask JSON object can be validated at runtime with meaningful error messages
+- A HippoTask JSON object can be validated at runtime with helpful error messages
+- `createTask({ title: "My task" })` produces a complete, valid HippoTask in 1 line
 - JSON Schema files are generated and valid
+- Quick Start example runs in under 60 seconds
 - Adapter interface is defined and documented
+- All code adheres to ENGINEERING.md standards (SOLID, TDD, strict TS)
 
 ---
 
@@ -139,9 +143,9 @@ Week  1  2  3  4  5  6  7  8  9  10  11  12  13  14
 
 ---
 
-## Milestone 5: Sync & Polish (Weeks 10–14)
+## Milestone 5: Distribution, Examples & Polish (Weeks 10–14)
 
-> **Goal:** Mature the sync capabilities, add CLI tooling, and prepare for public release.
+> **Goal:** Mature sync, publish packages, ship the interactive playground, and prepare for public release.
 
 ### Tasks
 
@@ -151,16 +155,26 @@ Week  1  2  3  4  5  6  7  8  9  10  11  12  13  14
 | 5.2 | Conflict resolution | `@hippotask/adapter-common` | Strategies: `last_write_wins`, `local_wins`, `remote_wins`, `manual`. Configurable per adapter. |
 | 5.3 | Webhook receiver | `@hippotask/adapter-common` | Generic webhook handler that adapters can implement. Signature verification. |
 | 5.4 | CLI tool | new package or root script | `npx hippotask pull jira`, `npx hippotask push linear`, `npx hippotask list`, `npx hippotask validate < task.json`. |
-| 5.5 | npm publishing setup | root | Changesets for versioning. Automated publish on release tag. Package READMEs with badges. |
-| 5.6 | Documentation site | `docs/` | Usage guides, API reference, adapter comparison, MCP setup guide. (GitHub Pages or similar.) |
-| 5.7 | Example projects | `examples/` | Basic usage, Jira sync, multi-platform aggregation, MCP agent workflow. |
-| 5.8 | Public launch checklist | root | LICENSE (MIT), CONTRIBUTING.md, CODE_OF_CONDUCT.md, issue templates, PR template. |
+| 5.5 | npm publishing setup | root | Changesets for versioning. Automated publish on release tag. ESM + CJS dual builds per DISTRIBUTION.md. Package READMEs with badges. |
+| 5.6 | JSR publishing | root | Publish `@hippotask/core` to JSR for Deno users. |
+| 5.7 | Documentation site (Starlight) | `docs-site/` | Starlight (Astro) site deployed to GitHub Pages. Includes: getting started, schema reference (TypeDoc), adapter guides, MCP setup, provider scorecard (interactive charts). |
+| 5.8 | Interactive Playground | `examples/playground` | Self-contained Vite + React app. Task editor with live validation, adapter simulator, provider scorecard radar charts, format converter. Per EXAMPLES.md spec. |
+| 5.9 | Multi-Platform Aggregator example | `examples/multi-platform` | Working example with mock mode + real adapter mode. Pretty report output. Per EXAMPLES.md spec. |
+| 5.10 | MCP Agent Workflow example | `examples/mcp-agent` | Working example with file store + simulated agent. Claude Desktop config template. Per EXAMPLES.md spec. |
+| 5.11 | Provider Scorecard (interactive) | docs site | Chart.js radar charts for each provider. Comparative bar chart. Data from `scorecard.json`. |
+| 5.12 | Bundle size budgets | root | `size-limit` config enforcing package size targets from DISTRIBUTION.md. CI fails on regression. |
+| 5.13 | Public launch checklist | root | LICENSE (MIT), CONTRIBUTING.md, CODE_OF_CONDUCT.md, issue templates, PR template, adapter development guide. |
+| 5.14 | Example CI testing | `.github/workflows/` | All examples built and smoke-tested in CI. |
 
 ### Exit Criteria
 - Bidirectional sync works between HippoTask and at least 2 platforms simultaneously
+- All packages published to npm under `@hippotask/*` scope (ESM + CJS)
+- `@hippotask/core` published to JSR
+- Documentation site is live with interactive provider scorecard
+- Interactive playground runs at `examples/playground` with `npm run dev`
+- All 4 examples run standalone (clone → install → run in < 60 seconds)
 - CLI provides basic utility for non-programmatic use
-- All packages published to npm under `@hippotask/*` scope
-- Documentation is comprehensive and accessible
+- Bundle sizes within budgets per DISTRIBUTION.md
 
 ---
 
@@ -177,6 +191,18 @@ Week  1  2  3  4  5  6  7  8  9  10  11  12  13  14
 
 ---
 
+## End Products Summary
+
+The project produces **three deliverables**, detailed in their respective docs:
+
+| Deliverable | Description | Docs |
+|-------------|-------------|------|
+| **📦 Library** | npm packages (`@hippotask/*`) importable in Node.js, Deno, Bun, browsers, edge runtimes. Schema + validation + adapters + MCP server. | [DISTRIBUTION.md](./DISTRIBUTION.md) |
+| **📊 Provider Scorecard** | Dashboard/chart rating each platform on 8 openness metrics (API completeness, rate limits, AI readiness, etc.) — static Markdown + interactive Chart.js. | [PROVIDER_SCORECARD.md](./PROVIDER_SCORECARD.md) |
+| **🎮 Examples & Playground** | 4 self-contained examples including an interactive web playground. Eventually evolves into a dedicated service. | [EXAMPLES.md](./EXAMPLES.md) |
+
+---
+
 ## Decision Log
 
 | Date | Decision | Rationale |
@@ -189,3 +215,11 @@ Week  1  2  3  4  5  6  7  8  9  10  11  12  13  14
 | 2026-03-08 | Adapters as optional peer deps of MCP server | Users install only what they need, keeps bundle small |
 | 2026-03-08 | 6-value HippoStatus enum | Covers >95% of workflows, platform-specific statuses preserved in status_raw |
 | 2026-03-08 | Flat Project → Task hierarchy | Avoids platform-specific organizational layers, deeper hierarchy preserved in metadata |
+| 2026-03-08 | Strict TDD — tests before code | ENGINEERING.md mandates Red-Green-Refactor for all core logic |
+| 2026-03-08 | SOLID as non-negotiable | Every principle mapped to concrete HippoTask patterns in ENGINEERING.md |
+| 2026-03-08 | Progressive disclosure DX | 2 lines for basic use, 5 for adapters, complexity only when needed |
+| 2026-03-08 | npm + JSR dual publishing | npm primary (broadest reach), JSR for Deno (secondary) |
+| 2026-03-08 | ESM primary, CJS fallback | Modern default, backwards compatibility via tsup |
+| 2026-03-08 | Starlight (Astro) for docs site | Purpose-built for OSS docs, search, versioning, GitHub Pages deployment |
+| 2026-03-08 | Provider scorecard with 8 metrics | Objective, measurable dimensions. Quarterly review cadence. |
+| 2026-03-08 | Interactive playground as Phase 1 of service | Self-contained Vite+React app, browser-only, evolves into hosted service later |

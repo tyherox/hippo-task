@@ -95,6 +95,51 @@ An IETF Internet-Draft extending JMAP for task sync, built on the calendar/conta
 ### task.json / Task YAML
 Lightweight community formats for local task tracking. HippoTask shares the philosophy of simplicity but adds the adapter layer and MCP integration that make tasks actually portable across real platforms.
 
+### Commercial Alternatives (Unito, Zapier, Make)
+These are SaaS products that solve sync as a hosted service. They work today, require no coding, and handle the hard parts (conflict resolution, webhooks, auth flows). But they're proprietary, not embeddable, and expensive at scale. HippoTask is the open-source, developer-first alternative.
+
+> 📖 **For a deep dive** on all competitors with full pros/cons analysis, see [COMPETITIVE_LANDSCAPE.md](./COMPETITIVE_LANDSCAPE.md).
+
+---
+
+## Pros & Cons — An Honest Assessment
+
+We believe in being transparent about what HippoTask does well and where it has limitations.
+
+### Strengths
+
+| Strength | Why It Matters |
+|----------|---------------|
+| **Open source (MIT)** | No vendor lock-in. Inspect, modify, fork, self-host. Your data never flows through our servers. |
+| **Schema-first design** | A single, predictable task shape across 10+ platforms. Type-safe, validatable, documented. |
+| **Composable packages** | Use just the schema (`@hippotask/core`), add one adapter, or use the whole toolkit. Pay only for what you need. |
+| **AI-native from day one** | MCP server is a primary deliverable, not an afterthought. Designed for agent workflows. |
+| **Multi-environment** | Core schema works in Node.js, Deno, Bun, browsers, edge runtimes, serverless. |
+| **Lossless data preservation** | `external_ids`, `*_raw` fields, and `metadata` mean platform data survives round-tripping. |
+| **Progressive complexity** | 2 lines to validate a task. 5 lines to connect to Jira. Complexity scales with your needs. |
+
+### Limitations
+
+| Limitation | Honest Assessment |
+|------------|-------------------|
+| **Not production-ready yet** | We're in planning phase. Competitors like Unito and Zapier work today. |
+| **Requires coding** | Developers only. No drag-and-drop, no UI, no no-code option. |
+| **Normalization is inherently lossy** | Flattening 10 different data models into one schema means some nuance is lost. `metadata` helps but isn't a perfect solution. |
+| **Sync is genuinely hard** | We provide primitives and patterns, not a turnkey sync engine. Bidirectional sync with conflict resolution is a hard distributed systems problem. |
+| **No hosted service** | You run everything yourself. No managed infrastructure. (This may change in the future.) |
+| **Limited scope** | Tasks and projects only. No documents, wikis, time tracking, invoicing. Intentional, but limiting for some use cases. |
+| **Adapter maintenance burden** | 10 platforms with evolving APIs = ongoing work. Community contributions help but aren't guaranteed. |
+| **New and unproven** | No production users yet. No track record. Adopt with the understanding that the schema may evolve before 1.0. |
+
+### When HippoTask Is the Wrong Choice
+
+Be honest with yourself — HippoTask isn't for everyone:
+
+- **"I just need Jira."** → Use the Jira API directly. HippoTask adds value when you need 2+ platforms.
+- **"My team needs sync without coding."** → Use Unito or Zapier. They work today with a UI.
+- **"I need documents, wikis, and tasks."** → Look at OWL/Plane or build a broader solution. We're tasks-only.
+- **"I need enterprise SLA and support."** → We're open source. There's no support contract. Consider a commercial solution.
+
 ---
 
 ## Design Philosophy

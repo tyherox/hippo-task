@@ -1,6 +1,9 @@
 # HippoTask — Architecture
 
 > Package structure, adapter interface, MCP server design, sync patterns, and error handling.
+>
+> For SOLID principles, TDD strategy, and code quality standards, see **[ENGINEERING.md](./ENGINEERING.md)**.
+> For distribution, publishing, and multi-environment support, see **[DISTRIBUTION.md](./DISTRIBUTION.md)**.
 
 ---
 
@@ -13,6 +16,7 @@
 - [5. Sync Patterns](#5-sync-patterns)
 - [6. Error Handling](#6-error-handling)
 - [7. Testing Strategy](#7-testing-strategy)
+- [8. Consumer Ease-of-Use Patterns](#8-consumer-ease-of-use-patterns)
 
 ---
 
@@ -679,3 +683,82 @@ packages/{package}/
     ├── unit/
     └── integration/
 ```
+
+---
+
+## 8. Consumer Ease-of-Use Patterns
+
+> Full detail in [ENGINEERING.md § Consumer DX](./ENGINEERING.md#5-consumer-dx--making-it-stupidly-easy).
+
+### Guiding Principle: Progressive Disclosure
+
+HippoTask is layered so consumers encounter complexity only when they need it:
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│  Layer 1: @hippotask/core                                      │
+│  → createTask(), validate(), types, JSON Schema                │
+│  → Works everywhere (Node, browser, Deno, Bun, edge)          │
+│  → Zero config, zero external deps (just Zod)                 │
+│  → This is what 60% of users need                              │
+├───────────────────────────────────────────────────────────────┤
+│  Layer 2: @hippotask/adapter-{platform}                        │
+│  → Connect to real platforms with one function call             │
+│  → adapter.connect({ token }) → adapter.listTasks()            │
+│  → Smart defaults for status/priority mapping                  │
+│  → This is what 30% of users add on top                        │
+├───────────────────────────────────────────────────────────────┤
+│  Layer 3: @hippotask/mcp-server                                │
+│  → Full AI agent integration                                   │
+│  → createServer() → server.start() (2 lines!)                 │
+│  → Optional adapter connections for platform sync              │
+│  → This is what 10% of users need (but growing fast)           │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### Builder Pattern for Complex Configuration
+
+When users need to customize, we provide a fluent builder pattern:
+
+```typescript
+// Simple case — one line
+const server = createServer();
+
+// Complex case — still readable
+const server = createServer({
+  store: "file",
+  storePath: "./tasks.json",
+  adapters: [
+    { platform: "jira", config: { domain: "...", token: "..." } },
+    { platform: "linear", config: { apiKey: "..." } },
+  ],
+  transport: { type: "http", port: 8080 },
+});
+```
+
+### Factory Functions Over Raw Constructors
+
+```typescript
+// What consumers see (clean, simple)
+import { createTask, validate, createServer } from "@hippotask/...";
+
+// What they DON'T see (implementation complexity)
+// Internal: Zod parsing, UUIDv7 generation, timestamp injection,
+// schema version stamping, deep merge logic, etc.
+```
+
+### Tree-Shakeable Exports
+
+Every package uses named exports (no default exports). Modern bundlers can tree-shake unused code:
+
+```typescript
+// Consumer only pays for what they use
+import { validate } from "@hippotask/core";
+// → Only the validation code is bundled, not ID generation, merge utils, etc.
+```
+
+### Cross-Reference
+
+- **Full DX standards and rules** → [ENGINEERING.md](./ENGINEERING.md)
+- **Multi-environment support** → [DISTRIBUTION.md](./DISTRIBUTION.md)
+- **Example code** → [EXAMPLES.md](./EXAMPLES.md)
