@@ -21,11 +21,13 @@ describe("generateId", () => {
     expect(ids.size).toBe(100);
   });
 
-  it("generates time-sortable IDs (UUIDv7)", () => {
+  it("generates time-sortable IDs (UUIDv7) across different milliseconds", async () => {
     const id1 = generateId();
+    // Wait 2ms to ensure different timestamp
+    await new Promise((resolve) => setTimeout(resolve, 2));
     const id2 = generateId();
     // UUIDv7 IDs are lexicographically sortable by time
-    // id2 should be >= id1 since it was generated after
-    expect(id2 >= id1).toBe(true);
+    // id2 should be > id1 since it was generated later
+    expect(id2 > id1).toBe(true);
   });
 });
