@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "verified_date": "2026-03-08",
+  "dimensions": [
+    "api_completeness",
+    "api_ergonomics",
+    "schema_flexibility",
+    "rate_limits",
+    "real_time",
+    "auth_simplicity",
+    "data_portability",
+    "ai_readiness"
+  ],
+  "providers": [
+    {
+      "id": "linear",
+      "name": "Linear",
+      "scores": {
+        "api_completeness": 5,
+        "api_ergonomics": 5,
+        "schema_flexibility": 3,
+        "rate_limits": 4,
+        "real_time": 5,
+        "auth_simplicity": 5,
+        "data_portability": 4,
+        "ai_readiness": 5
+      },
+      "overall": 4.5
+    },
+    {
+      "id": "github",
+      "name": "GitHub Issues/Projects",
+      "scores": {
+        "api_completeness": 4,
+        "api_ergonomics": 4,
+        "schema_flexibility": 3,
+        "rate_limits": 4,
+        "real_time": 5,
+        "auth_simplicity": 5,
+        "data_portability": 5,
+        "ai_readiness": 5
+      },
+      "overall": 4.4
+    },
+    {
+      "id": "jira",
+      "name": "Jira",
+      "scores": {
+        "api_completeness": 5,
+        "api_ergonomics": 3,
+        "schema_flexibility": 5,
+        "rate_limits": 5,
+        "real_time": 5,
+        "auth_simplicity": 3,
+        "data_portability": 4,
+        "ai_readiness": 3
+      },
+      "overall": 4.1
+    },
+    {
+      "id": "clickup",
+      "name": "ClickUp",
+      "scores": {
+        "api_completeness": 5,
+        "api_ergonomics": 3,
+        "schema_flexibility": 5,
+        "rate_limits": 2,
+        "real_time": 4,
+        "auth_simplicity": 4,
+        "data_portability": 3,
+        "ai_readiness": 3
+      },
+      "overall": 3.6
+    },
+    {
+      "id": "asana",
+      "name": "Asana",
+      "scores": {
+        "api_completeness": 4,
+        "api_ergonomics": 4,
+        "schema_flexibility": 4,
+        "rate_limits": 4,
+        "real_time": 4,
+        "auth_simplicity": 4,
+        "data_portability": 3,
+        "ai_readiness": 2
+      },
+      "overall": 3.6
+    },
+    {
+      "id": "todoist",
+      "name": "Todoist",
+      "scores": {
+        "api_completeness": 3,
+        "api_ergonomics": 4,
+        "schema_flexibility": 2,
+        "rate_limits": 3,
+        "real_time": 3,
+        "auth_simplicity": 5,
+        "data_portability": 3,
+        "ai_readiness": 2
+      },
+      "overall": 3.1
+    },
+    {
+      "id": "monday",
+      "name": "Monday.com",
+      "scores": {
+        "api_completeness": 4,
+        "api_ergonomics": 3,
+        "schema_flexibility": 4,
+        "rate_limits": 3,
+        "real_time": 3,
+        "auth_simplicity": 4,
+        "data_portability": 2,
+        "ai_readiness": 2
+      },
+      "overall": 3.1
+    },
+    {
+      "id": "trello",
+      "name": "Trello",
+      "scores": {
+        "api_completeness": 3,
+        "api_ergonomics": 3,
+        "schema_flexibility": 2,
+        "rate_limits": 3,
+        "real_time": 4,
+        "auth_simplicity": 3,
+        "data_portability": 3,
+        "ai_readiness": 2
+      },
+      "overall": 2.9
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "scores": {
+        "api_completeness": 3,
+        "api_ergonomics": 3,
+        "schema_flexibility": 4,
+        "rate_limits": 1,
+        "real_time": 1,
+        "auth_simplicity": 3,
+        "data_portability": 2,
+        "ai_readiness": 2
+      },
+      "overall": 2.4
+    },
+    {
+      "id": "planner",
+      "name": "Microsoft Planner",
+      "scores": {
+        "api_completeness": 3,
+        "api_ergonomics": 2,
+        "schema_flexibility": 2,
+        "rate_limits": 2,
+        "real_time": 3,
+        "auth_simplicity": 2,
+        "data_portability": 2,
+        "ai_readiness": 2
+      },
+      "overall": 2.3
+    }
+  ]
+}
