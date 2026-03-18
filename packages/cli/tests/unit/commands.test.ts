@@ -137,4 +137,79 @@ describe("CLI Commands", () => {
       expect(stderr).toContain("not found");
     });
   });
+
+  describe("update", () => {
+    it("updates task fields", () => {
+      const { stdout: createOut } = runCli('create "Original title"', storePath);
+      const created = JSON.parse(createOut);
+      const { stdout, exitCode } = runCli(
+        `update ${created.id} --title "Updated title" --status in_progress --priority high`,
+        storePath,
+      );
+      expect(exitCode).toBe(0);
+      const task = JSON.parse(stdout);
+      expect(task.title).toBe("Updated title");
+      expect(task.status).toBe("in_progress");
+      expect(task.priority).toBe("high");
+    });
+
+    it("logs activity on update", () => {
+      const { stdout: createOut } = runCli('create "Track this" --agent bot-1', storePath);
+      const created = JSON.parse(createOut);
+      const { stdout } = runCli(
+        `update ${created.id} --status in_progress --agent bot-1`,
+        storePath,
+      );
+      const task = JSON.parse(stdout);
+      const activity = task.metadata?.["hippotask.activity"];
+      expect(activity.length).toBeGreaterThanOrEqual(2); // created + status_changed
+    });
+
+    it("returns error for non-existent task", () => {
+      const { exitCode, stderr } = runCli('update fake-id --title "X"', storePath);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("not found");
+    });
+  });
+
+  describe("delete", () => {
+    it("deletes a task", () => {
+      const { stdout: createOut } = runCli('create "Doomed task"', storePath);
+      const created = JSON.parse(createOut);
+      const { exitCode } = runCli(`delete ${created.id}`, storePath);
+      expect(exitCode).toBe(0);
+
+      // Verify it's gone
+      const { exitCode: getCode } = runCli(`get ${created.id}`, storePath);
+      expect(getCode).toBe(1);
+    });
+
+    it("returns error for non-existent task", () => {
+      const { exitCode, stderr } = runCli("delete fake-id", storePath);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("not found");
+    });
+  });
+
+  describe("done", () => {
+    it("marks a task as done", () => {
+      const { stdout: createOut } = runCli('create "Finish this"', storePath);
+      const created = JSON.parse(createOut);
+      const { stdout, exitCode } = runCli(`done ${created.id}`, storePath);
+      expect(exitCode).toBe(0);
+      const task = JSON.parse(stdout);
+      expect(task.status).toBe("done");
+      expect(task.completed_at).toBeTruthy();
+    });
+
+    it("logs completion activity", () => {
+      const { stdout: createOut } = runCli('create "Complete me" --agent worker-1', storePath);
+      const created = JSON.parse(createOut);
+      const { stdout } = runCli(`done ${created.id} --agent worker-1`, storePath);
+      const task = JSON.parse(stdout);
+      const activity = task.metadata?.["hippotask.activity"];
+      const completedEntry = activity.find((e: { action: string }) => e.action === "completed");
+      expect(completedEntry).toBeTruthy();
+    });
+  });
 });

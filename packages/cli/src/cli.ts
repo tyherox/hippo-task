@@ -2,6 +2,9 @@ import { Command } from "commander";
 import { registerCreate } from "./commands/create.js";
 import { registerList } from "./commands/list.js";
 import { registerGet } from "./commands/get.js";
+import { registerUpdate } from "./commands/update.js";
+import { registerDelete } from "./commands/delete.js";
+import { registerDone } from "./commands/done.js";
 
 const program = new Command();
 
@@ -17,6 +20,9 @@ program
 registerCreate(program);
 registerList(program);
 registerGet(program);
+registerUpdate(program);
+registerDelete(program);
+registerDone(program);
 
 export function run(argv: string[]): void {
   program.parse(argv);
