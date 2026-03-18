@@ -212,4 +212,88 @@ describe("CLI Commands", () => {
       expect(completedEntry).toBeTruthy();
     });
   });
+
+  describe("claim + release", () => {
+    it("claims a task and shows claim info", () => {
+      const { stdout: createOut } = runCli('create "Claimable task"', storePath);
+      const created = JSON.parse(createOut);
+      const { stdout, exitCode } = runCli(
+        `claim ${created.id} --agent claude-42`,
+        storePath,
+      );
+      expect(exitCode).toBe(0);
+      const task = JSON.parse(stdout);
+      expect(task.metadata?.["hippotask.claimed_by"]).toBe("claude-42");
+    });
+
+    it("rejects claim by different agent", () => {
+      const { stdout: createOut } = runCli('create "Contested task"', storePath);
+      const created = JSON.parse(createOut);
+      runCli(`claim ${created.id} --agent agent-1`, storePath);
+      const { exitCode, stderr } = runCli(
+        `claim ${created.id} --agent agent-2`,
+        storePath,
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("already claimed");
+    });
+
+    it("releases a claim", () => {
+      const { stdout: createOut } = runCli('create "Release me"', storePath);
+      const created = JSON.parse(createOut);
+      runCli(`claim ${created.id} --agent agent-1`, storePath);
+      const { stdout, exitCode } = runCli(
+        `release ${created.id} --agent agent-1`,
+        storePath,
+      );
+      expect(exitCode).toBe(0);
+      const task = JSON.parse(stdout);
+      expect(task.metadata?.["hippotask.claimed_by"]).toBeUndefined();
+    });
+  });
+
+  describe("log", () => {
+    it("shows activity log as JSON", () => {
+      const { stdout: createOut } = runCli('create "Logged task" --agent bot-1', storePath);
+      const created = JSON.parse(createOut);
+      runCli(`claim ${created.id} --agent bot-1`, storePath);
+      const { stdout, exitCode } = runCli(`log ${created.id}`, storePath);
+      expect(exitCode).toBe(0);
+      const log = JSON.parse(stdout);
+      expect(log.entries.length).toBeGreaterThanOrEqual(2); // created + claimed
+    });
+  });
+
+  describe("info", () => {
+    it("shows store info as JSON", () => {
+      runCli('create "Task A"', storePath);
+      runCli('create "Task B"', storePath);
+      const { stdout, exitCode } = runCli("info", storePath);
+      expect(exitCode).toBe(0);
+      const info = JSON.parse(stdout);
+      expect(info.task_count).toBe(2);
+      expect(info.store_path).toBe(storePath);
+      expect(info.schema_version).toBe("1.0.0");
+    });
+
+    it("shows claim counts", () => {
+      const { stdout: createOut } = runCli('create "Claimed"', storePath);
+      const created = JSON.parse(createOut);
+      runCli(`claim ${created.id} --agent bot-1`, storePath);
+      const { stdout } = runCli("info", storePath);
+      const info = JSON.parse(stdout);
+      expect(info.active_claims).toBe(1);
+      expect(info.claims_by_agent["bot-1"]).toBe(1);
+    });
+  });
+
+  describe("init", () => {
+    it("creates .hippotask directory", () => {
+      const initDir = join(testDir, "project");
+      mkdirSync(initDir, { recursive: true });
+      const { stdout, exitCode } = runCli("init", storePath);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("ok");
+    });
+  });
 });

@@ -5,6 +5,11 @@ import { registerGet } from "./commands/get.js";
 import { registerUpdate } from "./commands/update.js";
 import { registerDelete } from "./commands/delete.js";
 import { registerDone } from "./commands/done.js";
+import { registerClaim } from "./commands/claim.js";
+import { registerRelease } from "./commands/release.js";
+import { registerLog } from "./commands/log.js";
+import { registerInit } from "./commands/init.js";
+import { registerInfo } from "./commands/info.js";
 
 const program = new Command();
 
@@ -16,13 +21,18 @@ program
   .option("--agent <id>", "Agent identifier for claims and activity log")
   .option("--pretty", "Human-readable output instead of JSON");
 
-// Register commands
+// Register all commands
 registerCreate(program);
 registerList(program);
 registerGet(program);
 registerUpdate(program);
 registerDelete(program);
 registerDone(program);
+registerClaim(program);
+registerRelease(program);
+registerLog(program);
+registerInit(program);
+registerInfo(program);
 
 export function run(argv: string[]): void {
   program.parse(argv);
