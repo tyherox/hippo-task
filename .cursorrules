@@ -1,0 +1,138 @@
+# HippoTask — Cursor Rules for AI Code Generation
+
+## Project Identity
+
+HippoTask is an open-source task interoperability toolkit. It provides a universal task schema (`@hippotask/core`), platform adapter interfaces (`@hippotask/adapter-common`), and a CLI with multi-agent safety features (`@hippotask/cli`). It is NOT a full product — it's a library and tools for developers and AI agents.
+
+## Hard Rules (NEVER violate)
+
+### 1. TDD — Tests First, Always
+- **Write tests BEFORE implementation.** No exceptions.
+- Every new function, module, or feature starts with a failing test.
+- Workflow: RED (write failing test) → GREEN (minimal code to pass) → REFACTOR (clean up).
+- Bug fixes MUST include a regression test that fails without the fix.
+- Target: ≥90% coverage on `@hippotask/core`, ≥80% on all other packages.
+
+### 2. TypeScript Strict Mode
+- All code must pass `strict: true` with all additional strict flags enabled (see `tsconfig.base.json`).
+- **NO `any` type.** Use `unknown` and narrow with type guards or Zod.
+- **NO `// @ts-ignore` or `// @ts-expect-error`** without a linked issue number.
+- **NO `as` type assertions** except when narrowing from `unknown` after validation.
+
+### 3. SOLID Principles
+- **Single Responsibility**: One file = one concern. If a file does two things, split it.
+- **Open/Closed**: Add new adapters/commands by creating new files, never modifying existing ones (except wiring in `cli.ts` or `index.ts`).
+- **Liskov Substitution**: All `HippoAdapter` implementations must be interchangeable — never inspect `adapter.platform` to branch logic.
+- **Interface Segregation**: Optional capabilities use the `AdapterCapabilities` object. Don't force implementations to stub methods they can't support.
+- **Dependency Inversion**: Depend on interfaces (`HippoAdapter`, `TaskStore`), not concrete classes.
+
+### 4. Zod for All Validation
+- Use Zod schemas for ALL input validation and type inference.
+- Schema files live in `packages/core/src/schema/`.
+- Runtime types are inferred via `z.infer<typeof Schema>` — never manually duplicate types.
+- New fields require both a Zod schema update AND corresponding test updates.
+
+### 5. Immutable Data Patterns
+- Functions return new objects, never mutate inputs.
+- Use spread (`{ ...obj, field: newValue }`) for updates.
+- Task objects returned from the store are snapshots — update via `store.update()`.
+
+## Code Style
+
+### Naming
+- Files: `kebab-case.ts` (e.g., `status-map.ts`, `rate-limiter.ts`)
+- Types/Interfaces: `PascalCase` (e.g., `HippoTask`, `AdapterCapabilities`)
+- Functions/methods: `camelCase` (e.g., `createTask`, `mapStatus`)
+- Constants: `SCREAMING_SNAKE` (e.g., `HIPPO_STATUSES`, `DEFAULT_CLAIM_TTL`)
+- Enum-like string unions: `snake_case` (e.g., `"in_progress"`, `"multi_select"`)
+
+### Function Design
+- Functions ≤ 30 lines (guidelines, rare exceptions for mappers).
+- 3+ parameters → use an options object: `fn({ title, status, priority })` not `fn(title, status, priority)`.
+- All I/O functions return `Promise` (even if currently synchronous — allows future swapping).
+- Validation functions return `Result<T, E>` (not throw). I/O functions throw on errors.
+
+### Imports
+- Use `.js` extension in all relative imports (required by Node16 module resolution).
+- Example: `import { HippoTaskSchema } from "./schema/task.js";`
+- Use `import type` for type-only imports.
+
+### Error Handling
+- Every error has a `code` string (machine-readable) and `message` (human-readable).
+- Adapter errors include `platform` and `statusCode`.
+- Validation errors include `issues[]` with field paths.
+- Never swallow errors with empty catch blocks.
+
+## Package Boundaries
+
+| Package | Responsibility | MUST NOT |
+|---------|---------------|----------|
+| `@hippotask/core` | Schema, validation, utilities | Import from adapter-common or cli |
+| `@hippotask/adapter-common` | Adapter interfaces, shared utils | Import from cli or concrete adapters |
+| `@hippotask/cli` | CLI commands, file store, safety | Depend on concrete adapters |
+| `@hippotask/adapter-*` | Platform-specific translation | Import from other adapters |
+
+## Test Patterns
+
+### File Structure
+```
+packages/{package}/
+├── src/
+│   └── {module}.ts
+└── tests/
+    └── unit/
+        └── {module}.test.ts
+```
+
+### Test Anatomy
+```typescript
+import { describe, it, expect } from "vitest";
+
+describe("FunctionName", () => {
+  it("describes the expected behavior", () => {
+    // Arrange
+    const input = { ... };
+    // Act
+    const result = functionName(input);
+    // Assert
+    expect(result).toEqual(expected);
+  });
+
+  it("handles edge case: empty input", () => { ... });
+  it("rejects invalid input with helpful error", () => { ... });
+});
+```
+
+### What to Test
+- ✅ Every public function (happy path + edge cases + error paths)
+- ✅ Schema validation (valid inputs pass, invalid inputs fail with correct paths)
+- ✅ Status/priority mapping (every mapping table entry)
+- ✅ CLI commands (via child process, check JSON output)
+- ❌ Private implementation details
+- ❌ Third-party library behavior
+
+## CLI Output Convention
+- Default output: **JSON** (one JSON object per line to stdout).
+- Errors: JSON to stderr with `{ "ok": false, "error": "message" }`.
+- `--pretty` flag: human-readable formatted output.
+- Never mix stdout (data) and stderr (errors) content.
+
+## Safety Layer Protocol (CLI)
+When modifying tasks via CLI:
+1. Always log activity via `appendActivity()` with the agent ID.
+2. `update` commands use optimistic locking (`expect_updated_at`).
+3. `done` command auto-releases claims.
+4. Claims are stored in `metadata` (not core schema fields).
+
+## AGENTS.md Update Protocol
+- When you add a new module, command, or significant feature to a package, **update that package's AGENTS.md**.
+- When you discover a gotcha or quirk, **add it to the relevant AGENTS.md**.
+- AGENTS.md files are living documents — they should always reflect the current state of the code.
+- See each package's AGENTS.md for domain-specific guidance.
+
+## Before Committing
+1. `pnpm build` — all packages build
+2. `pnpm test` — all tests pass
+3. `pnpm lint` — Biome passes (or `pnpm lint:fix` to auto-fix)
+4. Commit messages: imperative mood, describe WHAT changed and WHY
+5. One concern per commit — don't mix refactors with features
