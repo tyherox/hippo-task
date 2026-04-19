@@ -1,12 +1,13 @@
 import type {
-  HippoTask,
   HippoProject,
-  TaskQuery,
+  HippoTask,
   PaginatedResult,
+  SchemaVersion,
   TaskChangeEvent,
+  TaskQuery,
 } from "@hippotask/core";
-import type { HippoTaskCreate, HippoTaskUpdate } from "./types.js";
 import type { StatusMap } from "./status-map.js";
+import type { HippoTaskCreate, HippoTaskUpdate } from "./types.js";
 
 /**
  * Base configuration shared by all adapters.
@@ -27,6 +28,19 @@ export interface BaseAdapterConfig {
  * Consumers check capabilities before calling optional methods.
  */
 export interface AdapterCapabilities {
+  /**
+   * HippoTask schema versions this adapter can produce and consume.
+   *
+   * Adapters committing to lossless round-trips must list every version
+   * whose shape they can fully represent. When the registry grows, every
+   * adapter declares whether it's been tested against the new version —
+   * it's not implicit from the import's resolved version.
+   *
+   * See [SCHEMA_CHANGELOG](../../core/SCHEMA_CHANGELOG.md) for the
+   * current registry, and `docs/SCHEMA.md` §9 for the design rationale.
+   */
+  supportedSchemaVersions: readonly SchemaVersion[];
+
   /** Can receive real-time change events. */
   webhooks: boolean;
 
@@ -93,10 +107,7 @@ export interface HippoAdapter<
   createTask(task: HippoTaskCreate): Promise<HippoTask>;
 
   /** Update a task on the platform. Partial updates supported. */
-  updateTask(
-    externalId: string,
-    updates: HippoTaskUpdate,
-  ): Promise<HippoTask>;
+  updateTask(externalId: string, updates: HippoTaskUpdate): Promise<HippoTask>;
 
   /** Delete a task on the platform. */
   deleteTask(externalId: string): Promise<void>;

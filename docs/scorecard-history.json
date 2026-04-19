@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Append-only audit log for docs/PROVIDER_SCORECARD.md — every quarterly audit adds one entry.",
+  "history": [
+    {
+      "date": "2026-03-08",
+      "scorecard_version": "1.0.0",
+      "rubric_version": "1.0.0",
+      "changes": "Initial scoring based on March 2026 API research."
+    },
+    {
+      "date": "2026-04-19",
+      "scorecard_version": "2.0.0",
+      "rubric_version": "2.0.0",
+      "changes": "Deterministic rubric introduced (PROVIDER_SCORECARD.md §1.2). Re-verified all 10 providers against current (late 2025 / early 2026) API state with per-cell vendor-doc citations.",
+      "provider_deltas": {
+        "Jira": { "from": 4.1, "to": 4.5, "reason": "Atlassian Remote MCP Server GA + Rovo agents assignable; D8 5→5 (was 3)." },
+        "GitHub": { "from": 4.4, "to": 4.4, "reason": "Net-neutral: official github/github-mcp-server GA (Apr 2026) confirmed; dual Issues/ProjectsV2 still docks D2." },
+        "Linear": { "from": 4.5, "to": 4.3, "reason": "Deterministic D4 no longer credits undocumented 'generous' rate limits; raw 5,000 req/hr places at band 4." },
+        "Monday.com": { "from": 3.1, "to": 4.1, "reason": "First-party monday-api-mcp server + dynamic schema now explicitly rewarded under D3/D4 rubric." },
+        "Asana": { "from": 3.6, "to": 4.0, "reason": "MCP V2 (Feb 2026) + Service Accounts raise D8 to 3 and D6 to 5." },
+        "ClickUp": { "from": 3.6, "to": 3.9, "reason": "Official ClickUp MCP + Super Agents (Dec 2025) lift D8 to 4." },
+        "Todoist": { "from": 3.1, "to": 3.9, "reason": "Unified v1 fixed move-task; Doist MCP server + Sync batching bring D2 to 5 and D4 to 5." },
+        "Notion": { "from": 2.4, "to": 3.6, "reason": "Webhooks shipped (D5 1→3) + official MCP server + Notion 3.0 Agents (D8 2→4)." },
+        "Trello": { "from": 2.9, "to": 3.3, "reason": "Band-based D5 rewards 30+ events; native custom fields moved D3 from 2 to 3." },
+        "MS Planner": { "from": 2.3, "to": 2.9, "reason": "Copilot Studio MCP support (D8 2→4); $batch and halved-but-still-generous Graph throttle stay band 4." }
+      }
+    },
+    {
+      "date": "2026-04-19",
+      "scorecard_version": "2.0.1",
+      "rubric_version": "2.1.0",
+      "changes": "Patch audit: introduced machine-readable provider YAML layer (docs/scorecard/providers/) + generator + CI validator. Moved to Zod-validated source of truth; docs/scorecard.json and PROVIDER_SCORECARD.md §2/§3/§5 are now generated. Two cells moved when the generator recomputed scores from the rubric — both were hand-scoring errors in the v2.0.0 audit caught by the deterministic recomputation.",
+      "provider_deltas": {
+        "Monday.com": { "from": 4.1, "to": 4.3, "reason": "D1 was hand-scored 3 but sub-criteria yield 4 of 5 met (task_crud ✓, container_crud ✓, native_subtasks ✓, no_ops_gap ✓; core_fields_80pct ✗). Rubric recomputation corrects to 4." },
+        "MS Planner": { "from": 2.9, "to": 3.0, "reason": "D4 was hand-scored band 4 using a per-tenant estimate, but rubric §5 mandates the programmatic-integration path's documented ceiling (130k req/10s per-app) = 780k ops/min = band 5." }
+      }
+    }
+  ]
+}

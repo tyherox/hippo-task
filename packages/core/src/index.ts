@@ -47,7 +47,25 @@ export { validateTask, validateProject } from "./validation/validate.js";
 
 // ─── Factory Functions ──────────────────────────────────────────
 export { createTask, createProject } from "./validation/factory.js";
-export type { CreateTaskInput, CreateProjectInput } from "./validation/factory.js";
+export type {
+  CreateTaskInput,
+  CreateProjectInput,
+} from "./validation/factory.js";
+
+// ─── Versioning ─────────────────────────────────────────────────
+export {
+  CURRENT_SCHEMA_VERSION,
+  SUPPORTED_VERSIONS,
+  SchemaVersionSchema,
+  isSupportedVersion,
+  migrateTask,
+  migrateProject,
+  UnsupportedSchemaVersionError,
+} from "./versioning/index.js";
+export type {
+  SchemaVersion,
+  VersionRegistryEntry,
+} from "./versioning/index.js";
 
 // ─── Utilities ──────────────────────────────────────────────────
 export { generateId } from "./utils/id.js";

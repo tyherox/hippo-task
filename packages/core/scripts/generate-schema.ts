@@ -4,37 +4,51 @@
  * Output:
  *   packages/core/schema/hippo-task.schema.json
  *   packages/core/schema/hippo-project.schema.json
+ *
+ * The output embeds the current schema version in `$id` and `title` so
+ * downstream consumers can detect which HippoTask version they're
+ * looking at without parsing content.
  */
-import { writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { HippoTaskSchema } from "../src/schema/task.js";
 import { HippoProjectSchema } from "../src/schema/project.js";
+import { HippoTaskSchema } from "../src/schema/task.js";
+import { CURRENT_SCHEMA_VERSION } from "../src/versioning/versions.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const schemaDir = join(__dirname, "..", "schema");
 
 mkdirSync(schemaDir, { recursive: true });
 
-// Generate HippoTask JSON Schema
-const taskJsonSchema = zodToJsonSchema(HippoTaskSchema, {
-  name: "HippoTask",
-  $refStrategy: "none",
-});
-writeFileSync(
-  join(schemaDir, "hippo-task.schema.json"),
-  JSON.stringify(taskJsonSchema, null, 2) + "\n",
-);
+function writeSchema(
+  name: string,
+  filename: string,
+  zodSchema: Parameters<typeof zodToJsonSchema>[0],
+): void {
+  const rawSchema = zodToJsonSchema(zodSchema, {
+    name,
+    $refStrategy: "none",
+  }) as Record<string, unknown>;
 
-// Generate HippoProject JSON Schema
-const projectJsonSchema = zodToJsonSchema(HippoProjectSchema, {
-  name: "HippoProject",
-  $refStrategy: "none",
-});
-writeFileSync(
-  join(schemaDir, "hippo-project.schema.json"),
-  JSON.stringify(projectJsonSchema, null, 2) + "\n",
-);
+  const withMetadata = {
+    $schema: "http://json-schema.org/draft-07/schema#",
+    $id: `https://hippotask.dev/schema/${CURRENT_SCHEMA_VERSION}/${filename}`,
+    title: `${name} (schema ${CURRENT_SCHEMA_VERSION})`,
+    "x-hippotask-schema-version": CURRENT_SCHEMA_VERSION,
+    ...rawSchema,
+  };
 
-console.log("✅ Generated JSON Schema files in packages/core/schema/");
+  writeFileSync(
+    join(schemaDir, filename),
+    `${JSON.stringify(withMetadata, null, 2)}\n`,
+  );
+}
+
+writeSchema("HippoTask", "hippo-task.schema.json", HippoTaskSchema);
+writeSchema("HippoProject", "hippo-project.schema.json", HippoProjectSchema);
+
+console.log(
+  `Generated JSON Schema files (version ${CURRENT_SCHEMA_VERSION}) in packages/core/schema/`,
+);

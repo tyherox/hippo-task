@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SchemaVersionSchema } from "../versioning/versions.js";
 import { ProjectStatusSchema } from "./enums.js";
 
 /**
@@ -35,8 +36,14 @@ export const HippoProjectSchema = z.object({
   /** Untyped metadata overflow. */
   metadata: z.record(z.string(), z.unknown()).optional(),
 
-  /** Schema version this project conforms to. */
-  schema_version: z.string().min(1, "schema_version is required"),
+  /**
+   * Schema version this project conforms to.
+   *
+   * Must be one of the versions in the registry
+   * ({@link ../versioning/registry.ts}). Use `migrateProject` to
+   * upgrade older payloads.
+   */
+  schema_version: SchemaVersionSchema,
 });
 
 export type HippoProject = z.infer<typeof HippoProjectSchema>;

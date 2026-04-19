@@ -42,24 +42,26 @@ await createServer().start();
 - **Working across multiple tools?** — Normalize tasks from all your tools into one canonical shape for dashboards, reports, or automation.
 - **AI agent workflows?** — Give your agents structured task management via MCP, with a path to push results into your team's real tools.
 
-## Provider Scorecard
+## Provider Scorecard — 🟡 Preview
 
-How open and interoperable is each platform? We rate them on 8 dimensions.
+How open and interoperable is each platform? Every cell is scored **deterministically** against the [Scorecard Rubric](docs/SCORECARD_RUBRIC.md) — one YAML per provider at [`docs/scorecard/providers/`](docs/scorecard/providers), a CI-gated generator produces the numbers below and [`docs/scorecard.json`](docs/scorecard.json).
 
+<!-- BEGIN:AUTOGEN_README_SCORECARD -->
 | Provider | Overall | Best For |
 |----------|:-------:|----------|
-| **Linear** | ⭐ 4.5 | AI agents, modern DX |
+| **Jira** | ⭐ 4.5 | Enterprise, custom fields |
 | **GitHub** | ⭐ 4.4 | Open source, data portability |
-| **Jira** | ⭐ 4.1 | Enterprise, custom fields |
-| **ClickUp** | ⭐ 3.6 | Feature coverage |
-| **Asana** | ⭐ 3.6 | Cross-functional teams |
-| **Todoist** | ⭐ 3.1 | Personal tasks |
-| **Monday.com** | ⭐ 3.1 | Dynamic schemas |
-| **Trello** | ⭐ 2.9 | Simple Kanban |
-| **Notion** | ⭐ 2.4 | Flexible properties |
-| **MS Planner** | ⭐ 2.3 | Microsoft 365 ecosystem |
+| **Linear** | ⭐ 4.3 | AI agents, modern DX |
+| **Monday.com** | ⭐ 4.3 | Dynamic schemas |
+| **Asana** | ⭐ 4.0 | Cross-functional teams |
+| **ClickUp** | ⭐ 3.9 | Feature coverage |
+| **Todoist** | ⭐ 3.9 | Personal tasks |
+| **Notion** | ⭐ 3.6 | Flexible properties |
+| **Trello** | ⭐ 3.3 | Simple Kanban |
+| **MS Planner** | ⭐ 3.0 | Microsoft 365 ecosystem |
+<!-- END:AUTOGEN_README_SCORECARD -->
 
-> See [Provider Scorecard](docs/PROVIDER_SCORECARD.md) for detailed ratings on all 8 dimensions.
+> **Preview status.** The methodology is still settling — we're publishing now to gather external feedback. If you think a cell is wrong, [open an issue](https://github.com/hippotask/hippo-task/issues/new) with a vendor-doc URL showing why; maintainers re-apply the rubric and ship a patch audit if the cell moves. See the full §3 detailed ratings, §5 gotcha summary, and audit history in [docs/PROVIDER_SCORECARD.md](docs/PROVIDER_SCORECARD.md).
 
 ## Documentation
 

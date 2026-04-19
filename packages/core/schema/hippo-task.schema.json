@@ -1,4 +1,8 @@
 {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hippotask.dev/schema/1.0.0/hippo-task.schema.json",
+  "title": "HippoTask (schema 1.0.0)",
+  "x-hippotask-schema-version": "1.0.0",
   "$ref": "#/definitions/HippoTask",
   "definitions": {
     "HippoTask": {
@@ -190,7 +194,9 @@
         },
         "schema_version": {
           "type": "string",
-          "minLength": 1
+          "enum": [
+            "1.0.0"
+          ]
         }
       },
       "required": [
@@ -203,6 +209,5 @@
       ],
       "additionalProperties": false
     }
-  },
-  "$schema": "http://json-schema.org/draft-07/schema#"
+  }
 }

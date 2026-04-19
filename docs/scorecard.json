@@ -1,167 +1,1649 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "version": "1.0.0",
-  "verified_date": "2026-03-08",
-  "dimensions": [
-    "api_completeness",
-    "api_ergonomics",
-    "schema_flexibility",
-    "rate_limits",
-    "real_time",
-    "auth_simplicity",
-    "data_portability",
-    "ai_readiness"
-  ],
+  "verified_at": "2026-04-19",
+  "scorecard_version": "2.0.1",
+  "rubric_version": "2.1.0",
+  "rubric_url": "https://github.com/hippotask/hippo-task/blob/main/docs/SCORECARD_RUBRIC.md",
   "providers": [
     {
-      "id": "linear",
-      "name": "Linear",
-      "scores": {
-        "api_completeness": 5,
-        "api_ergonomics": 5,
-        "schema_flexibility": 3,
-        "rate_limits": 4,
-        "real_time": 5,
-        "auth_simplicity": 5,
-        "data_portability": 4,
-        "ai_readiness": 5
-      },
-      "overall": 4.5
-    },
-    {
-      "id": "github",
-      "name": "GitHub Issues/Projects",
-      "scores": {
-        "api_completeness": 4,
-        "api_ergonomics": 4,
-        "schema_flexibility": 3,
-        "rate_limits": 4,
-        "real_time": 5,
-        "auth_simplicity": 5,
-        "data_portability": 5,
-        "ai_readiness": 5
-      },
-      "overall": 4.4
-    },
-    {
-      "id": "jira",
       "name": "Jira",
+      "slug": "jira",
+      "overall": 4.5,
       "scores": {
-        "api_completeness": 5,
-        "api_ergonomics": 3,
-        "schema_flexibility": 5,
-        "rate_limits": 5,
-        "real_time": 5,
-        "auth_simplicity": 3,
-        "data_portability": 4,
-        "ai_readiness": 3
+        "api_completeness": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "task_crud",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/",
+              "note": "Full task CRUD via [Issues API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/)"
+            },
+            {
+              "id": "container_crud",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-projects/",
+              "note": "Full project CRUD via [Projects API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-projects/)"
+            },
+            {
+              "id": "core_fields_80pct",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-fields/",
+              "note": "13/14 native fields (`start_date` via `customfield_10015`, not guaranteed)"
+            },
+            {
+              "id": "native_subtasks",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/",
+              "note": "Native subtasks (`parent.key` + subtask issuetype)"
+            },
+            {
+              "id": "no_ops_gap",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-bulk-operations/",
+              "note": "No major ops gaps — [bulk create/edit/delete/transition](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-bulk-operations/)"
+            }
+          ]
+        },
+        "api_ergonomics": {
+          "value": 3,
+          "sub_criteria": [
+            {
+              "id": "single_api_model",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/",
+              "note": "Single REST v3 model — [v3 intro](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/) (v2 deprecated)"
+            },
+            {
+              "id": "vendor_sdk_fresh",
+              "met": false,
+              "note": "No first-party JS/TS SDK — [`jira.js`](https://github.com/MrRefactoring/jira.js) is community"
+            },
+            {
+              "id": "changelog_active",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/jira/platform/changelog/",
+              "note": "[Changelog](https://developer.atlassian.com/cloud/jira/platform/changelog/) active"
+            },
+            {
+              "id": "standard_richtext",
+              "met": false,
+              "note": "ADF (Atlassian Document Format) for rich text — proprietary JSON tree; [JRACLOUD-77436](https://jira.atlassian.com/browse/JRACLOUD-77436) (Markdown API) still unresolved"
+            },
+            {
+              "id": "standard_pagination",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/",
+              "note": "Cursor-paged `/search/jql` — replaced deprecated `/search` on 2025-10-31"
+            }
+          ]
+        },
+        "schema_flexibility": {
+          "value": 5,
+          "justification": "Unlimited typed custom fields with dynamic schema — [Fields API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-fields/). Soft guidance ≤ 1,000 fields/instance for performance; no hard cap.",
+          "evidence": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-fields/"
+        },
+        "rate_limits": {
+          "value": 5,
+          "effective_ops_per_min": 1083,
+          "tier_scored": "site-wide (all plans)",
+          "formula": "65,000 points/hour ÷ 1 pt/GET × 1/60 min ≈ 1,083 ops/min",
+          "justification": "[65,000 points/hour per site](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/). Bulk endpoints push effective throughput higher (50 issues per bulk-create, 1,000 IDs per bulk-edit).",
+          "evidence": "https://developer.atlassian.com/cloud/jira/platform/rate-limiting/"
+        },
+        "real_time": {
+          "value": 5,
+          "event_count": 30,
+          "justification": "30+ [webhook event identifiers](https://developer.atlassian.com/cloud/jira/platform/webhooks/) covering issues, comments, worklogs, sprints, projects, users, versions, attachments. Retry semantics documented.",
+          "evidence": "https://developer.atlassian.com/cloud/jira/platform/webhooks/"
+        },
+        "auth_simplicity": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "pat",
+              "met": true,
+              "evidence": "https://id.atlassian.com/manage-profile/security/api-tokens",
+              "note": "[API token](https://id.atlassian.com/manage-profile/security/api-tokens) (basic auth)"
+            },
+            {
+              "id": "oauth2",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/",
+              "note": "[OAuth 2.0 3LO](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/)"
+            },
+            {
+              "id": "pat_self_serve",
+              "met": true,
+              "evidence": "https://id.atlassian.com/manage-profile/security/api-tokens",
+              "note": "Token self-serve from Atlassian profile"
+            },
+            {
+              "id": "oauth_self_serve",
+              "met": false,
+              "note": "OAuth app registration requires Atlassian developer console + scope config"
+            },
+            {
+              "id": "enterprise_auth",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/jira/platform/getting-started-with-connect/",
+              "note": "[Connect](https://developer.atlassian.com/cloud/jira/platform/getting-started-with-connect/) / [Forge](https://developer.atlassian.com/platform/forge/) for enterprise"
+            }
+          ]
+        },
+        "data_portability": {
+          "value": 4,
+          "justification": "Full API coverage + bulk endpoints. No single \"export everything\" endpoint; admin CSV/JSON export exists via console but is not API-first.",
+          "evidence": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-bulk-operations/"
+        },
+        "ai_agent_readiness": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "official_mcp",
+              "met": true,
+              "evidence": "https://www.atlassian.com/platform/remote-mcp-server",
+              "note": "[Atlassian Remote MCP Server](https://www.atlassian.com/platform/remote-mcp-server) — GA 2025, Cloudflare-hosted, OAuth 2.1"
+            },
+            {
+              "id": "public_ai_api",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/platform/forge/manifest-reference/modules/rovo-agent/",
+              "note": "Rovo Agents public API — Forge [`rovo-agent` module](https://developer.atlassian.com/platform/forge/manifest-reference/modules/rovo-agent/)"
+            },
+            {
+              "id": "agent_entity_lifecycle",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/platform/forge/manifest-reference/modules/rovo-agent/",
+              "note": "Rovo agents assignable as Jira assignees (beta Feb 2026)"
+            },
+            {
+              "id": "production_signals",
+              "met": true,
+              "evidence": "https://www.atlassian.com/platform/remote-mcp-server",
+              "note": "Atlassian-led Claude / Rovo integration + published Rovo case studies"
+            }
+          ]
+        }
       },
-      "overall": 4.1
+      "bottom_line": "Jira leads overall — 2025's MCP + Rovo rollout flipped its historically weakest dimension into its strongest. ADF and no first-party SDK remain real papercuts.",
+      "gotcha": "ADF description format still mandatory on v3 — requires converter",
+      "verified_at": "2026-04-19"
     },
     {
-      "id": "clickup",
-      "name": "ClickUp",
+      "name": "GitHub",
+      "slug": "github",
+      "overall": 4.4,
       "scores": {
-        "api_completeness": 5,
-        "api_ergonomics": 3,
-        "schema_flexibility": 5,
-        "rate_limits": 2,
-        "real_time": 4,
-        "auth_simplicity": 4,
-        "data_portability": 3,
-        "ai_readiness": 3
+        "api_completeness": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "task_crud",
+              "met": true,
+              "evidence": "https://docs.github.com/en/rest/issues/issues",
+              "note": "Full issue CRUD — [REST Issues](https://docs.github.com/en/rest/issues/issues)"
+            },
+            {
+              "id": "container_crud",
+              "met": true,
+              "evidence": "https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects",
+              "note": "Full ProjectsV2 CRUD — [GraphQL](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects)"
+            },
+            {
+              "id": "core_fields_80pct",
+              "met": false,
+              "note": "8/14 native (priority, due_date, start_date, estimated_hours, logged_hours all require ProjectsV2 custom fields; issue `state` is binary not full status)"
+            },
+            {
+              "id": "native_subtasks",
+              "met": true,
+              "evidence": "https://github.blog/changelog/2024-12-12-github-issues-projects-close-issue-as-a-duplicate-rest-api-for-sub-issues-and-more/",
+              "note": "Native sub-issues REST API — [GA Dec 2024](https://github.blog/changelog/2024-12-12-github-issues-projects-close-issue-as-a-duplicate-rest-api-for-sub-issues-and-more/)"
+            },
+            {
+              "id": "no_ops_gap",
+              "met": true,
+              "evidence": "https://docs.github.com/en/rest/issues/issues",
+              "note": "No ops gaps — issues moveable across projects"
+            }
+          ]
+        },
+        "api_ergonomics": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "single_api_model",
+              "met": false,
+              "note": "Dual model — REST for Issues, GraphQL-only for ProjectsV2"
+            },
+            {
+              "id": "vendor_sdk_fresh",
+              "met": true,
+              "evidence": "https://github.com/octokit",
+              "note": "[Octokit](https://github.com/octokit) — first-party JS/TS, Ruby, Go, .NET (no official Python; PyGithub is community)"
+            },
+            {
+              "id": "changelog_active",
+              "met": true,
+              "evidence": "https://github.blog/changelog/",
+              "note": "[Changelog](https://github.blog/changelog/) + [breaking changes](https://docs.github.com/en/rest/about-the-rest-api/breaking-changes)"
+            },
+            {
+              "id": "standard_richtext",
+              "met": true,
+              "evidence": "https://docs.github.com/en/get-started/writing-on-github",
+              "note": "Markdown bodies throughout"
+            },
+            {
+              "id": "standard_pagination",
+              "met": true,
+              "evidence": "https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api",
+              "note": "Standard cursor pagination (GraphQL) / Link-header pagination (REST)"
+            }
+          ]
+        },
+        "schema_flexibility": {
+          "value": 3,
+          "justification": "ProjectsV2 supports 5 typed field types (text, number, date, single-select, iteration) with 50-option cap on single-select; no `updateProjectV2Field` mutation (option edits are delete+recreate = data loss). Custom fields are project-scoped, not issue-scoped. [Understanding fields](https://docs.github.com/en/issues/planning-and-tracking-with-projects/understanding-fields)",
+          "evidence": "https://docs.github.com/en/issues/planning-and-tracking-with-projects/understanding-fields"
+        },
+        "rate_limits": {
+          "value": 4,
+          "effective_ops_per_min": 833,
+          "tier_scored": "PAT authenticated",
+          "formula": "REST 5,000/hr = 83 rpm; GraphQL 5,000 pts/hr × 10 aliases = 833 ops/min",
+          "justification": "[REST PAT: 5,000/hr](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api); [GraphQL: 5,000 points/hr](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api). With GraphQL aliased multi-mutation, effective throughput ≈ 830 ops/min (83 req/min × 10 typical aliases). Enterprise Cloud raises to 10,000–15,000/hr.",
+          "evidence": "https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api"
+        },
+        "real_time": {
+          "value": 5,
+          "event_count": 60,
+          "justification": "~60 [webhook event types](https://docs.github.com/en/webhooks/webhook-events-and-payloads) including `issues`, `issue_comment`, `projects_v2*`, `sub_issues`. Documented retry semantics.",
+          "evidence": "https://docs.github.com/en/webhooks/webhook-events-and-payloads"
+        },
+        "auth_simplicity": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "pat",
+              "met": true,
+              "evidence": "https://github.blog/changelog/2025-03-18-fine-grained-pats-are-now-generally-available/",
+              "note": "Classic PAT + [fine-grained PAT](https://github.blog/changelog/2025-03-18-fine-grained-pats-are-now-generally-available/) (GA 2025-03-18)"
+            },
+            {
+              "id": "oauth2",
+              "met": true,
+              "evidence": "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps",
+              "note": "[OAuth App](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps) + [GitHub App](https://docs.github.com/en/apps/creating-github-apps)"
+            },
+            {
+              "id": "pat_self_serve",
+              "met": true,
+              "evidence": "https://github.com/settings/tokens",
+              "note": "Self-serve PAT"
+            },
+            {
+              "id": "oauth_self_serve",
+              "met": true,
+              "evidence": "https://docs.github.com/en/apps/creating-github-apps",
+              "note": "Self-serve OAuth / App registration"
+            },
+            {
+              "id": "enterprise_auth",
+              "met": true,
+              "evidence": "https://docs.github.com/en/apps/creating-github-apps",
+              "note": "GitHub App installations for enterprise"
+            }
+          ]
+        },
+        "data_portability": {
+          "value": 5,
+          "justification": "Full API + Git-native storage (inherently portable) + documented [migration tooling](https://docs.github.com/en/migrations).",
+          "evidence": "https://docs.github.com/en/migrations"
+        },
+        "ai_agent_readiness": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "official_mcp",
+              "met": true,
+              "evidence": "https://github.com/github/github-mcp-server",
+              "note": "[github/github-mcp-server](https://github.com/github/github-mcp-server) — v1.0.0 GA 2026-04-16, issues + projects + repo surface"
+            },
+            {
+              "id": "public_ai_api",
+              "met": true,
+              "evidence": "https://github.blog/changelog/2025-09-25-copilot-coding-agent-is-now-generally-available/",
+              "note": "Copilot coding agent [GA 2025-09-25](https://github.blog/changelog/2025-09-25-copilot-coding-agent-is-now-generally-available/) — assignable to issues"
+            },
+            {
+              "id": "agent_entity_lifecycle",
+              "met": true,
+              "evidence": "https://github.blog/changelog/2025-09-25-copilot-coding-agent-is-now-generally-available/",
+              "note": "Copilot-as-assignee (agent-as-user pattern)"
+            },
+            {
+              "id": "production_signals",
+              "met": true,
+              "evidence": "https://www.infoq.com/news/2026/04/github-copilot-cli-ga/",
+              "note": "[Copilot CLI GA](https://www.infoq.com/news/2026/04/github-copilot-cli-ga/) March 2026; broad agent-host partnerships"
+            }
+          ]
+        }
       },
-      "overall": 3.6
+      "bottom_line": "GitHub holds 4.4. Strong everywhere except schema flex, with the dual Issues/ProjectsV2 model as its enduring ergonomic cost.",
+      "gotcha": "Dual model (Issues REST + ProjectsV2 GraphQL) multiplies API surface",
+      "verified_at": "2026-04-19"
     },
     {
-      "id": "asana",
-      "name": "Asana",
+      "name": "Linear",
+      "slug": "linear",
+      "overall": 4.3,
       "scores": {
-        "api_completeness": 4,
-        "api_ergonomics": 4,
-        "schema_flexibility": 4,
-        "rate_limits": 4,
-        "real_time": 4,
-        "auth_simplicity": 4,
-        "data_portability": 3,
-        "ai_readiness": 2
+        "api_completeness": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "task_crud",
+              "met": true,
+              "evidence": "https://linear.app/developers/graphql",
+              "note": "Full issue CRUD — [GraphQL](https://linear.app/developers/graphql)"
+            },
+            {
+              "id": "container_crud",
+              "met": true,
+              "evidence": "https://linear.app/developers/graphql",
+              "note": "Full project CRUD"
+            },
+            {
+              "id": "core_fields_80pct",
+              "met": false,
+              "note": "11/14 native (78.5% — just under 80%; `start_date` is read-only `startedAt`, `estimated_hours` is unitless points, `logged_hours` missing)"
+            },
+            {
+              "id": "native_subtasks",
+              "met": true,
+              "evidence": "https://linear.app/developers/graphql",
+              "note": "Native sub-issues (`Issue.parent`)"
+            },
+            {
+              "id": "no_ops_gap",
+              "met": true,
+              "evidence": "https://linear.app/developers/graphql",
+              "note": "No ops gaps"
+            }
+          ]
+        },
+        "api_ergonomics": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "single_api_model",
+              "met": true,
+              "evidence": "https://linear.app/developers/graphql",
+              "note": "Single GraphQL model"
+            },
+            {
+              "id": "vendor_sdk_fresh",
+              "met": true,
+              "evidence": "https://www.npmjs.com/package/@linear/sdk",
+              "note": "[`@linear/sdk`](https://www.npmjs.com/package/@linear/sdk) v80.1.0 — first-party TS, active"
+            },
+            {
+              "id": "changelog_active",
+              "met": true,
+              "evidence": "https://linear.app/changelog",
+              "note": "[Changelog](https://linear.app/changelog) with `[API]` prefix for API entries"
+            },
+            {
+              "id": "standard_richtext",
+              "met": true,
+              "evidence": "https://linear.app/developers/graphql",
+              "note": "Markdown descriptions"
+            },
+            {
+              "id": "standard_pagination",
+              "met": true,
+              "evidence": "https://linear.app/developers/graphql",
+              "note": "Cursor pagination"
+            }
+          ]
+        },
+        "schema_flexibility": {
+          "value": 2,
+          "justification": "No arbitrary user-defined custom fields. Extensibility = labels, projects, cycles, and (June 2025) [Asks fields](https://linear.app/changelog/2025-06-05-asks-fields-and-triage-routing) scoped to triage — not general-purpose.",
+          "evidence": "https://linear.app/changelog/2025-06-05-asks-fields-and-triage-routing"
+        },
+        "rate_limits": {
+          "value": 4,
+          "effective_ops_per_min": 833,
+          "tier_scored": "API key",
+          "formula": "5,000 req/hr × 10 aliases ÷ 60 min ≈ 833 ops/min",
+          "justification": "[5,000 req/hr + 3M complexity pts/hr](https://linear.app/developers/rate-limiting) on API keys; 10,000 pts max per query. At 10-alias typical batch → effective ~830 ops/min. Complexity budget lets denser queries fetch hundreds of items per request.",
+          "evidence": "https://linear.app/developers/rate-limiting"
+        },
+        "real_time": {
+          "value": 5,
+          "event_count": 40,
+          "justification": "14 entity types × 3 action types + specialized (Issue SLA, OAuthApp revoked, **Agent session events**) = 40+ [webhook events](https://linear.app/developers/webhooks).",
+          "evidence": "https://linear.app/developers/webhooks"
+        },
+        "auth_simplicity": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "pat",
+              "met": true,
+              "evidence": "https://linear.app/developers/oauth-2-0-authentication",
+              "note": "[Personal API keys](https://linear.app/developers/oauth-2-0-authentication)"
+            },
+            {
+              "id": "oauth2",
+              "met": true,
+              "evidence": "https://linear.app/developers/oauth-2-0-authentication",
+              "note": "[OAuth 2.0](https://linear.app/developers/oauth-2-0-authentication)"
+            },
+            {
+              "id": "pat_self_serve",
+              "met": true,
+              "evidence": "https://linear.app/developers/oauth-2-0-authentication",
+              "note": "PAT self-serve"
+            },
+            {
+              "id": "oauth_self_serve",
+              "met": true,
+              "evidence": "https://linear.app/developers/oauth-2-0-authentication",
+              "note": "OAuth app registration self-serve"
+            },
+            {
+              "id": "enterprise_auth",
+              "met": true,
+              "evidence": "https://linear.app/developers/oauth-actor-authorization",
+              "note": "[OAuth actor authorization](https://linear.app/developers/oauth-actor-authorization) for agents/apps as actors"
+            }
+          ]
+        },
+        "data_portability": {
+          "value": 4,
+          "justification": "Full GraphQL coverage — everything is fetchable via paged queries. No dedicated bulk-export endpoint.",
+          "evidence": "https://linear.app/developers/graphql"
+        },
+        "ai_agent_readiness": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "official_mcp",
+              "met": true,
+              "evidence": "https://linear.app/docs/mcp",
+              "note": "[Linear MCP server](https://linear.app/docs/mcp) — hosted, find/create/update for issues/projects/comments"
+            },
+            {
+              "id": "public_ai_api",
+              "met": true,
+              "evidence": "https://linear.app/now/our-approach-to-building-the-agent-interaction-sdk",
+              "note": "[Agent Interaction SDK](https://linear.app/now/our-approach-to-building-the-agent-interaction-sdk) (Developer Preview)"
+            },
+            {
+              "id": "agent_entity_lifecycle",
+              "met": true,
+              "evidence": "https://linear.app/developers/agents",
+              "note": "[Agent Sessions API](https://linear.app/developers/agents) — agents as first-class users with session lifecycle"
+            },
+            {
+              "id": "production_signals",
+              "met": true,
+              "evidence": "https://linear.app/developers/agents",
+              "note": "Published case studies (Rivet May 2025, Reflag) + webhook event category for agents"
+            }
+          ]
+        }
       },
-      "overall": 3.6
+      "bottom_line": "Linear remains the DX leader and has the most mature agent primitives (sessions, actor-based auth). Lack of custom fields is the only real weakness.",
+      "gotcha": "Hard ceiling on custom fields (labels + Asks only); estimate is points, not hours",
+      "verified_at": "2026-04-19"
     },
     {
-      "id": "todoist",
-      "name": "Todoist",
-      "scores": {
-        "api_completeness": 3,
-        "api_ergonomics": 4,
-        "schema_flexibility": 2,
-        "rate_limits": 3,
-        "real_time": 3,
-        "auth_simplicity": 5,
-        "data_portability": 3,
-        "ai_readiness": 2
-      },
-      "overall": 3.1
-    },
-    {
-      "id": "monday",
       "name": "Monday.com",
+      "slug": "monday",
+      "overall": 4.3,
       "scores": {
-        "api_completeness": 4,
-        "api_ergonomics": 3,
-        "schema_flexibility": 4,
-        "rate_limits": 3,
-        "real_time": 3,
-        "auth_simplicity": 4,
-        "data_portability": 2,
-        "ai_readiness": 2
+        "api_completeness": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "task_crud",
+              "met": true,
+              "evidence": "https://developer.monday.com/api-reference/reference/items",
+              "note": "Full item CRUD"
+            },
+            {
+              "id": "container_crud",
+              "met": true,
+              "evidence": "https://developer.monday.com/api-reference/reference/boards",
+              "note": "Full board/group CRUD"
+            },
+            {
+              "id": "core_fields_80pct",
+              "met": false,
+              "note": "5/14 native (id, title, parent_id, created_at, updated_at); all other fields require column-type custom fields"
+            },
+            {
+              "id": "native_subtasks",
+              "met": true,
+              "evidence": "https://developer.monday.com/api-reference/reference/subitems",
+              "note": "Native subitems (`create_subitem`)"
+            },
+            {
+              "id": "no_ops_gap",
+              "met": true,
+              "evidence": "https://developer.monday.com/api-reference/reference/items",
+              "note": "No ops gaps"
+            }
+          ]
+        },
+        "api_ergonomics": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "single_api_model",
+              "met": true,
+              "evidence": "https://developer.monday.com/api-reference/docs/basics",
+              "note": "Single GraphQL model"
+            },
+            {
+              "id": "vendor_sdk_fresh",
+              "met": true,
+              "evidence": "https://www.npmjs.com/package/monday-sdk-js",
+              "note": "[`monday-sdk-js`](https://www.npmjs.com/package/monday-sdk-js) — first-party TS/JS"
+            },
+            {
+              "id": "changelog_active",
+              "met": true,
+              "evidence": "https://developer.monday.com/api-reference/changelog",
+              "note": "[Changelog](https://developer.monday.com/api-reference/changelog) active"
+            },
+            {
+              "id": "standard_richtext",
+              "met": true,
+              "evidence": "https://developer.monday.com/api-reference/reference/column-types-reference",
+              "note": "Text / long-text column types in standard formats"
+            },
+            {
+              "id": "standard_pagination",
+              "met": true,
+              "evidence": "https://developer.monday.com/api-reference/docs/basics",
+              "note": "Cursor pagination"
+            }
+          ]
+        },
+        "schema_flexibility": {
+          "value": 5,
+          "justification": "Fully dynamic schema — 27+ [column types](https://developer.monday.com/api-reference/reference/column-types-reference) including status, dropdown, text, long_text, numbers, date, timeline, people, tags, checkbox, link, email, phone, rating, color_picker, dependency, file, formula, mirror, connect_boards, subitems, time_tracking, hour, location, vote, world_clock, country. No hard cap on columns per board.",
+          "evidence": "https://developer.monday.com/api-reference/reference/column-types-reference"
+        },
+        "rate_limits": {
+          "value": 5,
+          "effective_ops_per_min": 1000000,
+          "tier_scored": "Free (personal token, plan-independent programmatic path)",
+          "formula": "Personal token 1M pts/min on Free ÷ 1 pt/op (GET) = 1,000,000 ops/min",
+          "justification": "Personal token [10M complexity pts/min](https://developer.monday.com/api-reference/docs/rate-limits) (1M Free/Trial). `create_item` ≈ 10k pts → ≈ 1,000 writes/min; reads far more. Daily call caps apply at low tiers but complexity is the binding constraint for integrations.",
+          "evidence": "https://developer.monday.com/api-reference/docs/rate-limits"
+        },
+        "real_time": {
+          "value": 4,
+          "event_count": 15,
+          "justification": "~15+ [webhook events](https://developer.monday.com/api-reference/reference/webhooks) including `change_column_value`, `change_status_column_value`, `create_item`, `create_subitem`, `item_archived/deleted/moved`, `create_update`, plus 12 app-lifecycle events. Board-scoped registration.",
+          "evidence": "https://developer.monday.com/api-reference/reference/webhooks"
+        },
+        "auth_simplicity": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "pat",
+              "met": true,
+              "evidence": "https://developer.monday.com/api-reference/docs/authentication",
+              "note": "V2 personal API tokens"
+            },
+            {
+              "id": "oauth2",
+              "met": true,
+              "evidence": "https://developer.monday.com/apps/docs/oauth",
+              "note": "[OAuth 2.0](https://developer.monday.com/apps/docs/oauth)"
+            },
+            {
+              "id": "pat_self_serve",
+              "met": true,
+              "evidence": "https://developer.monday.com/api-reference/docs/authentication",
+              "note": "PAT self-serve"
+            },
+            {
+              "id": "oauth_self_serve",
+              "met": true,
+              "evidence": "https://developer.monday.com/apps/docs/oauth",
+              "note": "OAuth app self-serve"
+            },
+            {
+              "id": "enterprise_auth",
+              "met": false,
+              "note": "No service-account / SSO-integrated token for enterprise (OAuth-only path)"
+            }
+          ]
+        },
+        "data_portability": {
+          "value": 3,
+          "justification": "Full GraphQL API. No dedicated bulk export; board-based model requires per-board schema introspection before extraction.",
+          "evidence": "https://developer.monday.com/api-reference/docs/basics"
+        },
+        "ai_agent_readiness": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "official_mcp",
+              "met": true,
+              "evidence": "https://github.com/mondaycom/mcp",
+              "note": "[`@mondaydotcomorg/monday-api-mcp`](https://github.com/mondaycom/mcp) — first-party, ~15 tools + dynamic GraphQL beta"
+            },
+            {
+              "id": "public_ai_api",
+              "met": true,
+              "evidence": "https://monday.com/w/mcp",
+              "note": "[Sidekick](https://monday.com/w/mcp), Vibe, AI Blocks — programmable AI surface"
+            },
+            {
+              "id": "agent_entity_lifecycle",
+              "met": false,
+              "note": "No agent-specific entity/lifecycle documented"
+            },
+            {
+              "id": "production_signals",
+              "met": true,
+              "evidence": "https://monday.com/w/mcp",
+              "note": "Hosted MCP integrations with Claude / Cursor / Copilot"
+            }
+          ]
+        }
       },
-      "overall": 3.1
+      "bottom_line": "Dynamic column schema that penalized completeness is precisely what makes flexibility and rate limits excellent. First-party MCP closes the AI gap.",
+      "gotcha": "Dynamic column schema — adapter must introspect each board before mapping",
+      "verified_at": "2026-04-19"
     },
     {
-      "id": "trello",
-      "name": "Trello",
+      "name": "Asana",
+      "slug": "asana",
+      "overall": 4,
       "scores": {
-        "api_completeness": 3,
-        "api_ergonomics": 3,
-        "schema_flexibility": 2,
-        "rate_limits": 3,
-        "real_time": 4,
-        "auth_simplicity": 3,
-        "data_portability": 3,
-        "ai_readiness": 2
+        "api_completeness": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "task_crud",
+              "met": true,
+              "evidence": "https://developers.asana.com/reference/rest-api-reference",
+              "note": "Full task CRUD"
+            },
+            {
+              "id": "container_crud",
+              "met": true,
+              "evidence": "https://developers.asana.com/reference/rest-api-reference",
+              "note": "Full project CRUD"
+            },
+            {
+              "id": "core_fields_80pct",
+              "met": false,
+              "note": "11/14 native (status requires custom field; native priority exists but limited to 3 fixed values)"
+            },
+            {
+              "id": "native_subtasks",
+              "met": true,
+              "evidence": "https://developers.asana.com/reference/rest-api-reference",
+              "note": "Native subtasks (`parent`)"
+            },
+            {
+              "id": "no_ops_gap",
+              "met": true,
+              "evidence": "https://developers.asana.com/reference/batch-api",
+              "note": "Batch API exists but per-request limits apply"
+            }
+          ]
+        },
+        "api_ergonomics": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "single_api_model",
+              "met": true,
+              "evidence": "https://developers.asana.com/reference/rest-api-reference",
+              "note": "Single REST model"
+            },
+            {
+              "id": "vendor_sdk_fresh",
+              "met": true,
+              "evidence": "https://www.npmjs.com/package/asana",
+              "note": "[`asana` on npm](https://www.npmjs.com/package/asana) + [PyPI](https://pypi.org/project/asana/) — first-party, active (Node/Python); Java/PHP/Ruby deprecated"
+            },
+            {
+              "id": "changelog_active",
+              "met": true,
+              "evidence": "https://forum.asana.com/c/forum-en/api/api-changelog/204",
+              "note": "[Changelog](https://forum.asana.com/c/forum-en/api/api-changelog/204) (forum category — public, active)"
+            },
+            {
+              "id": "standard_richtext",
+              "met": true,
+              "evidence": "https://developers.asana.com/reference/rest-api-reference",
+              "note": "HTML / plain text notes"
+            },
+            {
+              "id": "standard_pagination",
+              "met": true,
+              "evidence": "https://developers.asana.com/docs/pagination",
+              "note": "`opt_fields` + cursor pagination"
+            }
+          ]
+        },
+        "schema_flexibility": {
+          "value": 4,
+          "justification": "Typed custom fields: text, number, date, single-select, multi-select, people, formula (read-only). [100 fields/project](https://developers.asana.com/docs/custom-fields-guide) (raised from 30). Workspace-scoped.",
+          "evidence": "https://developers.asana.com/docs/custom-fields-guide"
+        },
+        "rate_limits": {
+          "value": 3,
+          "effective_ops_per_min": 150,
+          "tier_scored": "Free",
+          "formula": "150 rpm on Free tier (Paid tier would score band 5 at 1,500 rpm)",
+          "justification": "[Free: 150 req/min; Paid: 1,500 req/min](https://developers.asana.com/docs/rate-limits). Score at Free = band 3 (Paid would be band 5). Search capped at 60/min. Duplication jobs capped at 5 concurrent.",
+          "evidence": "https://developers.asana.com/docs/rate-limits"
+        },
+        "real_time": {
+          "value": 4,
+          "event_count": 15,
+          "justification": "Resource-level [webhooks](https://developers.asana.com/docs/webhooks-guide) with HMAC signing, exponential-backoff retry, 24h failure expiry. Compact events (re-fetch required). ~15+ event combinations.",
+          "evidence": "https://developers.asana.com/docs/webhooks-guide"
+        },
+        "auth_simplicity": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "pat",
+              "met": true,
+              "evidence": "https://developers.asana.com/docs/personal-access-token",
+              "note": "[PAT](https://developers.asana.com/docs/personal-access-token)"
+            },
+            {
+              "id": "oauth2",
+              "met": true,
+              "evidence": "https://developers.asana.com/docs/oauth",
+              "note": "[OAuth 2.0](https://developers.asana.com/docs/oauth)"
+            },
+            {
+              "id": "pat_self_serve",
+              "met": true,
+              "evidence": "https://developers.asana.com/docs/personal-access-token",
+              "note": "PAT self-serve"
+            },
+            {
+              "id": "oauth_self_serve",
+              "met": true,
+              "evidence": "https://developers.asana.com/docs/oauth",
+              "note": "OAuth self-serve"
+            },
+            {
+              "id": "enterprise_auth",
+              "met": true,
+              "evidence": "https://developers.asana.com/docs/authentication",
+              "note": "Service Accounts (Enterprise) — see [Authentication](https://developers.asana.com/docs/authentication)"
+            }
+          ]
+        },
+        "data_portability": {
+          "value": 4,
+          "justification": "Full API + batch + CSV export (UI). Tasks-in-multiple-projects adds extraction complexity but is tractable.",
+          "evidence": "https://developers.asana.com/reference/batch-api"
+        },
+        "ai_agent_readiness": {
+          "value": 3,
+          "sub_criteria": [
+            {
+              "id": "official_mcp",
+              "met": true,
+              "evidence": "https://developers.asana.com/docs/mcp-server",
+              "note": "[Asana MCP Server V2](https://developers.asana.com/docs/mcp-server) — GA Feb 2026, streamable HTTP, ~42 tools (V1 SSE server sunset 2026-05-11)"
+            },
+            {
+              "id": "public_ai_api",
+              "met": false,
+              "note": "AI Studio / Asana Intelligence has no public API"
+            },
+            {
+              "id": "agent_entity_lifecycle",
+              "met": false,
+              "note": "No agent-specific entity"
+            },
+            {
+              "id": "production_signals",
+              "met": true,
+              "evidence": "https://asana.com/inside-asana/fall-release-2025",
+              "note": "Claude integration (conversations → projects)"
+            }
+          ]
+        }
       },
-      "overall": 2.9
+      "bottom_line": "Asana's MCP V2 + Service Accounts raise the floor considerably. AI Studio being product-only rather than programmable is the remaining gap.",
+      "gotcha": "Native priority limited to 3 fixed values; rich status still needs a custom field",
+      "verified_at": "2026-04-19"
     },
     {
-      "id": "notion",
+      "name": "ClickUp",
+      "slug": "clickup",
+      "overall": 3.9,
+      "scores": {
+        "api_completeness": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "task_crud",
+              "met": true,
+              "evidence": "https://developer.clickup.com/docs/tasks",
+              "note": "Full task CRUD"
+            },
+            {
+              "id": "container_crud",
+              "met": true,
+              "evidence": "https://developer.clickup.com/reference/",
+              "note": "Full list/folder/space CRUD"
+            },
+            {
+              "id": "core_fields_80pct",
+              "met": true,
+              "evidence": "https://developer.clickup.com/docs/tasks",
+              "note": "14/14 native (rare — includes native time-tracking read/write)"
+            },
+            {
+              "id": "native_subtasks",
+              "met": true,
+              "evidence": "https://developer.clickup.com/docs/tasks",
+              "note": "Native subtasks"
+            },
+            {
+              "id": "no_ops_gap",
+              "met": true,
+              "evidence": "https://developer.clickup.com/docs/tasks",
+              "note": "Tasks moveable across lists"
+            }
+          ]
+        },
+        "api_ergonomics": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "single_api_model",
+              "met": true,
+              "evidence": "https://developer.clickup.com/",
+              "note": "REST v2 stable, v3 endpoints [shipping gradually](https://developer.clickup.com/) (dual version adds minor confusion)"
+            },
+            {
+              "id": "vendor_sdk_fresh",
+              "met": false,
+              "note": "No first-party SDK (community only: `clickup-python-sdk`, `pyclickup`)"
+            },
+            {
+              "id": "changelog_active",
+              "met": true,
+              "evidence": "https://feedback.clickup.com/changelog/api-v2",
+              "note": "[Changelog](https://feedback.clickup.com/changelog/api-v2)"
+            },
+            {
+              "id": "standard_richtext",
+              "met": true,
+              "evidence": "https://developer.clickup.com/docs/tasks",
+              "note": "`markdown_description` supported"
+            },
+            {
+              "id": "standard_pagination",
+              "met": true,
+              "evidence": "https://developer.clickup.com/docs/tasks",
+              "note": "Standard pagination"
+            }
+          ]
+        },
+        "schema_flexibility": {
+          "value": 5,
+          "justification": "~18 [custom field types](https://developer.clickup.com/docs/customfields) (text, number, currency, date, checkbox, email, phone, URL, dropdown, labels, rating, progress, people, tasks, location, emoji, formula, files). 500 options per dropdown/label. Free tier capped at 60 total field uses; paid unlimited.",
+          "evidence": "https://developer.clickup.com/docs/customfields"
+        },
+        "rate_limits": {
+          "value": 2,
+          "effective_ops_per_min": 100,
+          "tier_scored": "Free / Unlimited / Business",
+          "formula": "100 rpm at entry tiers (Business Plus 1,000 rpm would score band 5; Enterprise 10,000 rpm)",
+          "justification": "[Per-token, per-minute](https://developer.clickup.com/docs/rate-limits): Free/Unlimited/Business = **100 rpm**, Business Plus = 1,000, Enterprise = 10,000. Score at Free = band 2. Business Plus would be band 5.",
+          "evidence": "https://developer.clickup.com/docs/rate-limits"
+        },
+        "real_time": {
+          "value": 4,
+          "event_count": 20,
+          "justification": "Comprehensive [webhooks](https://developer.clickup.com/docs/webhooks) — task / list / folder / space / goal / keyResult × create/update/delete plus `*` wildcard. ~20+ events.",
+          "evidence": "https://developer.clickup.com/docs/webhooks"
+        },
+        "auth_simplicity": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "pat",
+              "met": true,
+              "evidence": "https://developer.clickup.com/docs/authentication",
+              "note": "Personal token (`pk_` prefix, never expires)"
+            },
+            {
+              "id": "oauth2",
+              "met": true,
+              "evidence": "https://developer.clickup.com/docs/authentication",
+              "note": "[OAuth 2.0](https://developer.clickup.com/docs/authentication)"
+            },
+            {
+              "id": "pat_self_serve",
+              "met": true,
+              "evidence": "https://developer.clickup.com/docs/authentication",
+              "note": "PAT self-serve"
+            },
+            {
+              "id": "oauth_self_serve",
+              "met": true,
+              "evidence": "https://developer.clickup.com/docs/authentication",
+              "note": "OAuth self-serve"
+            },
+            {
+              "id": "enterprise_auth",
+              "met": false,
+              "note": "No dedicated service-account / enterprise-token tier"
+            }
+          ]
+        },
+        "data_portability": {
+          "value": 3,
+          "justification": "Full API coverage. No bulk-export endpoint. 5-level hierarchy (Workspace → Space → Folder → List → Task → Subtask) means extraction requires walking the tree.",
+          "evidence": "https://developer.clickup.com/docs/tasks"
+        },
+        "ai_agent_readiness": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "official_mcp",
+              "met": true,
+              "evidence": "https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server",
+              "note": "[Official ClickUp MCP server](https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server) (OAuth-only, task CRUD + Brain context)"
+            },
+            {
+              "id": "public_ai_api",
+              "met": true,
+              "evidence": "https://clickup.com/blog/mcp-tools/",
+              "note": "[ClickUp Super Agents](https://clickup.com/blog/mcp-tools/) GA Dec 22, 2025"
+            },
+            {
+              "id": "agent_entity_lifecycle",
+              "met": false,
+              "note": "No agent-specific entity pattern"
+            },
+            {
+              "id": "production_signals",
+              "met": true,
+              "evidence": "https://clickup.com/blog/mcp-tools/",
+              "note": "2026 roadmap for external MCP tool integration"
+            }
+          ]
+        }
+      },
+      "bottom_line": "Completeness leader (14/14 native) with MCP and Super Agents closing the AI gap. Free-tier rate limit and no first-party SDK are the drag.",
+      "gotcha": "Free/Unlimited/Business = 100 rpm; realistic sync needs Business Plus (1k rpm)",
+      "verified_at": "2026-04-19"
+    },
+    {
+      "name": "Todoist",
+      "slug": "todoist",
+      "overall": 3.9,
+      "scores": {
+        "api_completeness": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "task_crud",
+              "met": true,
+              "evidence": "https://developer.todoist.com/api/v1/",
+              "note": "Full task CRUD — [unified v1](https://developer.todoist.com/api/v1/)"
+            },
+            {
+              "id": "container_crud",
+              "met": true,
+              "evidence": "https://developer.todoist.com/api/v1/",
+              "note": "Full project CRUD"
+            },
+            {
+              "id": "core_fields_80pct",
+              "met": false,
+              "note": "9/14 native (no status beyond `is_completed`/`checked`; no `start_date`; no `logged_hours`; `updated_at` not consistently exposed)"
+            },
+            {
+              "id": "native_subtasks",
+              "met": true,
+              "evidence": "https://developer.todoist.com/api/v1/",
+              "note": "Native subtasks (`parent_id`)"
+            },
+            {
+              "id": "no_ops_gap",
+              "met": true,
+              "evidence": "https://developer.todoist.com/api/v1/",
+              "note": "`move_task` command — historical \"can't move between projects\" gotcha is fixed"
+            }
+          ]
+        },
+        "api_ergonomics": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "single_api_model",
+              "met": true,
+              "evidence": "https://developer.todoist.com/api/v1/",
+              "note": "Single unified v1 model (REST v2 + Sync v9 deprecating early 2026)"
+            },
+            {
+              "id": "vendor_sdk_fresh",
+              "met": true,
+              "evidence": "https://github.com/Doist/todoist-api-typescript",
+              "note": "[`@doist/todoist-api-typescript`](https://github.com/Doist/todoist-api-typescript) v9.3 (2026-04-18), [`todoist-api-python`](https://github.com/Doist/todoist-api-python) v4.x — both first-party, active"
+            },
+            {
+              "id": "changelog_active",
+              "met": true,
+              "evidence": "https://groups.google.com/a/doist.com/g/todoist-api",
+              "note": "[Changelog](https://groups.google.com/a/doist.com/g/todoist-api) (Google Group)"
+            },
+            {
+              "id": "standard_richtext",
+              "met": true,
+              "evidence": "https://developer.todoist.com/api/v1/",
+              "note": "Markdown descriptions"
+            },
+            {
+              "id": "standard_pagination",
+              "met": true,
+              "evidence": "https://developer.todoist.com/api/v1/",
+              "note": "Cursor pagination"
+            }
+          ]
+        },
+        "schema_flexibility": {
+          "value": 2,
+          "justification": "Labels only — no user-defined custom fields.",
+          "evidence": "https://developer.todoist.com/api/v1/"
+        },
+        "rate_limits": {
+          "value": 5,
+          "effective_ops_per_min": 6700,
+          "tier_scored": "per-user (all plans)",
+          "formula": "1,000 req / 15 min ≈ 67 rpm × 100 commands/sync = 6,700 ops/min",
+          "justification": "[1,000 req / 15 min REST](https://developer.todoist.com/api/v1/) ≈ 67 rpm, but `/sync` batches up to **100 commands per request** → effective 6,700 ops/min — band 5.",
+          "evidence": "https://developer.todoist.com/api/v1/"
+        },
+        "real_time": {
+          "value": 4,
+          "event_count": 15,
+          "justification": "[Webhooks](https://developer.todoist.com/api/v1/#tag/Webhooks) with HMAC-SHA256 signature. Events: `item:added|updated|deleted|completed|uncompleted`, `note:*`, `project:*`, `label:*`, `filter:*`, `reminder:fired`. ~15+ events.",
+          "evidence": "https://developer.todoist.com/api/v1/#tag/Webhooks"
+        },
+        "auth_simplicity": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "pat",
+              "met": true,
+              "evidence": "https://developer.todoist.com/api/v1/#tag/Authentication",
+              "note": "Personal API token"
+            },
+            {
+              "id": "oauth2",
+              "met": true,
+              "evidence": "https://developer.todoist.com/api/v1/#tag/Authentication",
+              "note": "[OAuth 2.0](https://developer.todoist.com/api/v1/#tag/Authentication)"
+            },
+            {
+              "id": "pat_self_serve",
+              "met": true,
+              "evidence": "https://developer.todoist.com/api/v1/#tag/Authentication",
+              "note": "Token self-serve"
+            },
+            {
+              "id": "oauth_self_serve",
+              "met": true,
+              "evidence": "https://developer.todoist.com/api/v1/#tag/Authentication",
+              "note": "OAuth self-serve"
+            },
+            {
+              "id": "enterprise_auth",
+              "met": false,
+              "note": "No dedicated enterprise auth tier"
+            }
+          ]
+        },
+        "data_portability": {
+          "value": 4,
+          "justification": "Full API + `/sync` full-snapshot endpoint (100 full-sync req / 15 min).",
+          "evidence": "https://developer.todoist.com/api/v1/"
+        },
+        "ai_agent_readiness": {
+          "value": 3,
+          "sub_criteria": [
+            {
+              "id": "official_mcp",
+              "met": true,
+              "evidence": "https://github.com/Doist/todoist-ai",
+              "note": "[Doist MCP server](https://github.com/Doist/todoist-ai) — hosted at `https://ai.todoist.net/mcp`, streamable HTTP, OAuth"
+            },
+            {
+              "id": "public_ai_api",
+              "met": false,
+              "note": "No separate agent API"
+            },
+            {
+              "id": "agent_entity_lifecycle",
+              "met": false,
+              "note": "No agent entity"
+            },
+            {
+              "id": "production_signals",
+              "met": true,
+              "evidence": "https://github.com/Doist/todoist-ai",
+              "note": "Official MCP adoption + ecosystem directory listings"
+            }
+          ]
+        }
+      },
+      "bottom_line": "Simple but well-rounded — Sync API batching rewards batch-capable clients, unified v1 fixed the move-task gotcha. Labels-only schema is the ceiling.",
+      "gotcha": "No `status` field beyond done/not-done; no start_date; no logged_hours",
+      "verified_at": "2026-04-19"
+    },
+    {
       "name": "Notion",
+      "slug": "notion",
+      "overall": 3.6,
       "scores": {
-        "api_completeness": 3,
-        "api_ergonomics": 3,
-        "schema_flexibility": 4,
-        "rate_limits": 1,
-        "real_time": 1,
-        "auth_simplicity": 3,
-        "data_portability": 2,
-        "ai_readiness": 2
+        "api_completeness": {
+          "value": 3,
+          "sub_criteria": [
+            {
+              "id": "task_crud",
+              "met": true,
+              "evidence": "https://developers.notion.com/reference/intro",
+              "note": "Full page / database CRUD"
+            },
+            {
+              "id": "container_crud",
+              "met": true,
+              "evidence": "https://developers.notion.com/reference/intro",
+              "note": "Full workspace / container CRUD"
+            },
+            {
+              "id": "core_fields_80pct",
+              "met": false,
+              "note": "11/14 native (priority, estimated_hours, logged_hours via custom properties)"
+            },
+            {
+              "id": "native_subtasks",
+              "met": true,
+              "evidence": "https://developers.notion.com/reference/intro",
+              "note": "Native sub-pages via `parent`"
+            },
+            {
+              "id": "no_ops_gap",
+              "met": false,
+              "note": "Description as blocks is a real ops gap — no atomic \"set description\""
+            }
+          ]
+        },
+        "api_ergonomics": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "single_api_model",
+              "met": true,
+              "evidence": "https://developers.notion.com/reference/intro",
+              "note": "Single REST model"
+            },
+            {
+              "id": "vendor_sdk_fresh",
+              "met": true,
+              "evidence": "https://www.npmjs.com/package/@notionhq/client",
+              "note": "[`@notionhq/client`](https://www.npmjs.com/package/@notionhq/client) v5.18+ — first-party TS/JS, active"
+            },
+            {
+              "id": "changelog_active",
+              "met": true,
+              "evidence": "https://developers.notion.com/page/changelog",
+              "note": "[Changelog](https://developers.notion.com/page/changelog)"
+            },
+            {
+              "id": "standard_richtext",
+              "met": false,
+              "note": "Rich-text is Notion blocks (proprietary recursive tree) — no standard Markdown surface"
+            },
+            {
+              "id": "standard_pagination",
+              "met": true,
+              "evidence": "https://developers.notion.com/reference/intro",
+              "note": "Standard `start_cursor` / `next_cursor` pagination"
+            }
+          ]
+        },
+        "schema_flexibility": {
+          "value": 5,
+          "justification": "20+ [property types](https://developers.notion.com/reference/update-property-schema-object) — title, rich_text, number, select, multi_select, status, date, people, files, checkbox, url, email, phone, formula, relation, rollup, created_time, created_by, last_edited_time, last_edited_by, unique_id. No hard count cap.",
+          "evidence": "https://developers.notion.com/reference/update-property-schema-object"
+        },
+        "rate_limits": {
+          "value": 3,
+          "effective_ops_per_min": 180,
+          "tier_scored": "per-integration (all plans)",
+          "formula": "3 req/s × 60 s = 180 rpm",
+          "justification": "[~3 req/s per integration](https://developers.notion.com/reference/request-limits) (token bucket, bursts to 10) — ~180 rpm. No paid tier raises this.",
+          "evidence": "https://developers.notion.com/reference/request-limits"
+        },
+        "real_time": {
+          "value": 3,
+          "event_count": 10,
+          "justification": "[Webhooks](https://developers.notion.com/reference/webhooks) shipped (2025+) — lightweight event notifications (re-fetch required). No user / workspace-membership events. Event coverage narrower than Jira / GitHub — band 3.",
+          "evidence": "https://developers.notion.com/reference/webhooks"
+        },
+        "auth_simplicity": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "pat",
+              "met": true,
+              "evidence": "https://developers.notion.com/reference/authentication",
+              "note": "Internal integration tokens (static bearer, single workspace)"
+            },
+            {
+              "id": "oauth2",
+              "met": true,
+              "evidence": "https://developers.notion.com/docs/authorization",
+              "note": "[OAuth 2.0](https://developers.notion.com/docs/authorization) public integrations"
+            },
+            {
+              "id": "pat_self_serve",
+              "met": true,
+              "evidence": "https://developers.notion.com/reference/authentication",
+              "note": "Internal token self-serve"
+            },
+            {
+              "id": "oauth_self_serve",
+              "met": true,
+              "evidence": "https://developers.notion.com/docs/authorization",
+              "note": "OAuth self-serve"
+            },
+            {
+              "id": "enterprise_auth",
+              "met": true,
+              "evidence": "https://developers.notion.com/docs/authorization",
+              "note": "Enterprise workspace-level OAuth"
+            }
+          ]
+        },
+        "data_portability": {
+          "value": 2,
+          "justification": "API coverage is complete but [2025-09-03 \"Data Source\" split](https://developers.notion.com/docs/upgrade-guide-2025-09-03) was breaking; blocks-based export requires recursive fetching against 3 req/s rate; no dedicated bulk export.",
+          "evidence": "https://developers.notion.com/docs/upgrade-guide-2025-09-03"
+        },
+        "ai_agent_readiness": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "official_mcp",
+              "met": true,
+              "evidence": "https://github.com/makenotion/notion-mcp-server",
+              "note": "[notion-mcp-server v2](https://github.com/makenotion/notion-mcp-server) — first-party, hosted + self-host"
+            },
+            {
+              "id": "public_ai_api",
+              "met": true,
+              "evidence": "https://developers.notion.com/reference/intro",
+              "note": "Notion AI readable via normal endpoints"
+            },
+            {
+              "id": "agent_entity_lifecycle",
+              "met": true,
+              "evidence": "https://www.notion.com/releases/2025-09-18",
+              "note": "[Notion 3.0 Agents](https://www.notion.com/releases/2025-09-18) — integration-first agent surface (Sep 18, 2025)"
+            },
+            {
+              "id": "production_signals",
+              "met": false,
+              "note": "No published major-host partnership cited at time of audit"
+            }
+          ]
+        }
       },
-      "overall": 2.4
+      "bottom_line": "Notion's 2025 additions (webhooks + MCP + Agents) eliminated its catastrophic ratings. Block-based descriptions and rate limits remain the shape of its ceiling.",
+      "gotcha": "Description = recursive block tree at 3 req/s; 2025-09-03 Data Source split was breaking",
+      "verified_at": "2026-04-19"
     },
     {
-      "id": "planner",
-      "name": "Microsoft Planner",
+      "name": "Trello",
+      "slug": "trello",
+      "overall": 3.3,
       "scores": {
-        "api_completeness": 3,
-        "api_ergonomics": 2,
-        "schema_flexibility": 2,
-        "rate_limits": 2,
-        "real_time": 3,
-        "auth_simplicity": 2,
-        "data_portability": 2,
-        "ai_readiness": 2
+        "api_completeness": {
+          "value": 2,
+          "sub_criteria": [
+            {
+              "id": "task_crud",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/trello/rest/",
+              "note": "Basic card CRUD"
+            },
+            {
+              "id": "container_crud",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/trello/rest/",
+              "note": "Full board / list CRUD"
+            },
+            {
+              "id": "core_fields_80pct",
+              "met": false,
+              "note": "9/14 native — no priority, no estimated/logged_hours, `created_at` implicit in ObjectId only"
+            },
+            {
+              "id": "native_subtasks",
+              "met": false,
+              "note": "No native subtasks — checklists only (checkItems are not cards; `convertToCardFromCheckItem` breaks parent link)"
+            },
+            {
+              "id": "no_ops_gap",
+              "met": false,
+              "note": "Ops gap: status = list position (fragile when users reorder lists)"
+            }
+          ]
+        },
+        "api_ergonomics": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "single_api_model",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/trello/rest/",
+              "note": "Single REST `/1/` model (frozen for a decade)"
+            },
+            {
+              "id": "vendor_sdk_fresh",
+              "met": false,
+              "note": "No first-party SDK; community [`trello.js`](https://www.npmjs.com/package/trello.js) most actively maintained"
+            },
+            {
+              "id": "changelog_active",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/trello/changelog/",
+              "note": "[Changelog](https://developer.atlassian.com/cloud/trello/changelog/)"
+            },
+            {
+              "id": "standard_richtext",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/trello/rest/",
+              "note": "Markdown `desc`"
+            },
+            {
+              "id": "standard_pagination",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/trello/rest/",
+              "note": "Standard pagination (`before` / `since` / `limit`)"
+            }
+          ]
+        },
+        "schema_flexibility": {
+          "value": 3,
+          "justification": "Native [custom fields](https://developer.atlassian.com/cloud/trello/rest/api-group-customfields/) — text, number, date, checkbox, list (dropdown). 5 types puts it in band 3.",
+          "evidence": "https://developer.atlassian.com/cloud/trello/rest/api-group-customfields/"
+        },
+        "rate_limits": {
+          "value": 4,
+          "effective_ops_per_min": 600,
+          "tier_scored": "per-token",
+          "formula": "100 req / 10 s per token × 60 s = 600 rpm",
+          "justification": "[300 req / 10s per API key, 100 req / 10s per token](https://developer.atlassian.com/cloud/trello/guides/rest-api/rate-limits/) — binding = 600 rpm/token. > 200 429s per key → key-wide penalty.",
+          "evidence": "https://developer.atlassian.com/cloud/trello/guides/rest-api/rate-limits/"
+        },
+        "real_time": {
+          "value": 5,
+          "event_count": 30,
+          "justification": "Model-scoped [webhooks](https://developer.atlassian.com/cloud/trello/guides/rest-api/webhooks/) — rich event list (createCard, updateCard, commentCard, addMemberToCard, updateCheckItem, createList, updateList, copyCard, voteOnCard, etc.) ≥ 30.",
+          "evidence": "https://developer.atlassian.com/cloud/trello/guides/rest-api/webhooks/"
+        },
+        "auth_simplicity": {
+          "value": 3,
+          "sub_criteria": [
+            {
+              "id": "pat",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/",
+              "note": "API Key + Token"
+            },
+            {
+              "id": "oauth2",
+              "met": false,
+              "note": "OAuth 1.0a only — **no OAuth 2.0** on public REST"
+            },
+            {
+              "id": "pat_self_serve",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/",
+              "note": "Token self-serve"
+            },
+            {
+              "id": "oauth_self_serve",
+              "met": true,
+              "evidence": "https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/",
+              "note": "OAuth self-serve (dated 1.0a flow)"
+            },
+            {
+              "id": "enterprise_auth",
+              "met": false,
+              "note": "No dedicated enterprise auth"
+            }
+          ]
+        },
+        "data_portability": {
+          "value": 4,
+          "justification": "Full API + per-board JSON export (UI + API). Simple model = easy extraction.",
+          "evidence": "https://developer.atlassian.com/cloud/trello/rest/"
+        },
+        "ai_agent_readiness": {
+          "value": 1,
+          "sub_criteria": [
+            {
+              "id": "official_mcp",
+              "met": false,
+              "note": "No Trello-specific MCP server (Atlassian Rovo / Remote MCP covers Jira/Confluence, not Trello)"
+            },
+            {
+              "id": "public_ai_api",
+              "met": false,
+              "note": "No programmable AI API"
+            },
+            {
+              "id": "agent_entity_lifecycle",
+              "met": false,
+              "note": "No agent entity"
+            },
+            {
+              "id": "production_signals",
+              "met": false,
+              "note": "No published partnerships for Trello specifically"
+            }
+          ]
+        }
       },
-      "overall": 2.3
+      "bottom_line": "Trello is Atlassian's other task product — but nearly none of the Atlassian 2025/2026 AI investment reached it. Simple, stable, real-time solid; schema and AI are weak.",
+      "gotcha": "No subtasks, no priority, OAuth 1.0a only, no Trello-specific MCP",
+      "verified_at": "2026-04-19"
+    },
+    {
+      "name": "MS Planner",
+      "slug": "ms-planner",
+      "overall": 3,
+      "scores": {
+        "api_completeness": {
+          "value": 2,
+          "sub_criteria": [
+            {
+              "id": "task_crud",
+              "met": true,
+              "evidence": "https://learn.microsoft.com/en-us/graph/api/resources/plannertask?view=graph-rest-1.0",
+              "note": "Full task CRUD — [Planner tasks](https://learn.microsoft.com/en-us/graph/api/resources/plannertask?view=graph-rest-1.0)"
+            },
+            {
+              "id": "container_crud",
+              "met": true,
+              "evidence": "https://learn.microsoft.com/en-us/graph/api/resources/planner-overview?view=graph-rest-1.0",
+              "note": "Full plan CRUD"
+            },
+            {
+              "id": "core_fields_80pct",
+              "met": false,
+              "note": "9/14 native (no estimated/logged_hours; `percentComplete` limited to 0/50/100 — status is 3-state not 6-state)"
+            },
+            {
+              "id": "native_subtasks",
+              "met": false,
+              "note": "No true subtasks (buckets are flat containers; checklist items don't nest)"
+            },
+            {
+              "id": "no_ops_gap",
+              "met": false,
+              "note": "Ops gap: premium / Project features API-inaccessible"
+            }
+          ]
+        },
+        "api_ergonomics": {
+          "value": 5,
+          "sub_criteria": [
+            {
+              "id": "single_api_model",
+              "met": true,
+              "evidence": "https://learn.microsoft.com/en-us/graph/api/resources/planner-overview?view=graph-rest-1.0",
+              "note": "Single Graph REST model (v1.0 stable + beta)"
+            },
+            {
+              "id": "vendor_sdk_fresh",
+              "met": true,
+              "evidence": "https://learn.microsoft.com/en-us/graph/sdks/sdks-overview",
+              "note": "[Microsoft Graph SDKs](https://learn.microsoft.com/en-us/graph/sdks/sdks-overview) — first-party .NET, JS/TS, Java, Python, Go, PHP, PowerShell"
+            },
+            {
+              "id": "changelog_active",
+              "met": true,
+              "evidence": "https://learn.microsoft.com/en-us/graph/whats-new-overview",
+              "note": "[What's new](https://learn.microsoft.com/en-us/graph/whats-new-overview)"
+            },
+            {
+              "id": "standard_richtext",
+              "met": true,
+              "evidence": "https://learn.microsoft.com/en-us/graph/api/resources/plannertaskdetails?view=graph-rest-1.0",
+              "note": "HTML (beta) / plain-text descriptions"
+            },
+            {
+              "id": "standard_pagination",
+              "met": true,
+              "evidence": "https://learn.microsoft.com/en-us/graph/paging",
+              "note": "`@odata.nextLink` pagination"
+            }
+          ]
+        },
+        "schema_flexibility": {
+          "value": 2,
+          "justification": "6 boolean categories (v1.0) / 25 (beta) on `plannerAppliedCategories` — plan-level label descriptions, no typed custom fields.",
+          "evidence": "https://learn.microsoft.com/en-us/graph/api/resources/plannerappliedcategories?view=graph-rest-1.0"
+        },
+        "rate_limits": {
+          "value": 5,
+          "effective_ops_per_min": 780000,
+          "tier_scored": "per-app across tenants",
+          "formula": "130,000 req / 10 s × 60 s = 780,000 ops/min (per-tenant cap halved 2025-09-30)",
+          "justification": "[130,000 req / 10s per app across tenants](https://learn.microsoft.com/en-us/graph/throttling-limits) globally — generous in aggregate; [per-app/per-user-per-tenant cap was halved 2025-09-30](https://learn.microsoft.com/en-us/graph/throttling). [$batch](https://learn.microsoft.com/en-us/graph/json-batching) allows 20 sub-requests.",
+          "evidence": "https://learn.microsoft.com/en-us/graph/throttling-limits"
+        },
+        "real_time": {
+          "value": 2,
+          "event_count": 0,
+          "justification": "Graph [change notifications](https://learn.microsoft.com/en-us/graph/change-notifications-overview) support webhooks + Event Hubs + Event Grid — but **Planner resources are not in the supported-resources list**. Only [delta queries](https://learn.microsoft.com/en-us/graph/delta-query-overview) apply — band 2.",
+          "evidence": "https://learn.microsoft.com/en-us/graph/change-notifications-overview"
+        },
+        "auth_simplicity": {
+          "value": 2,
+          "sub_criteria": [
+            {
+              "id": "pat",
+              "met": false,
+              "note": "No PAT — delegated-only"
+            },
+            {
+              "id": "oauth2",
+              "met": true,
+              "evidence": "https://learn.microsoft.com/en-us/graph/permissions-reference",
+              "note": "Entra ID OAuth 2.0"
+            },
+            {
+              "id": "pat_self_serve",
+              "met": false,
+              "note": "No self-serve token (Azure app registration required)"
+            },
+            {
+              "id": "oauth_self_serve",
+              "met": false,
+              "note": "App-only permissions unsupported for Planner"
+            },
+            {
+              "id": "enterprise_auth",
+              "met": true,
+              "evidence": "https://learn.microsoft.com/en-us/graph/permissions-reference",
+              "note": "Enterprise auth (Entra ID)"
+            }
+          ]
+        },
+        "data_portability": {
+          "value": 2,
+          "justification": "API coverage limited to basic plans — premium / Project plans inaccessible via Graph. Data locked in M365 ecosystem. No standalone export endpoint.",
+          "evidence": "https://learn.microsoft.com/en-us/graph/api/resources/planner-overview?view=graph-rest-1.0"
+        },
+        "ai_agent_readiness": {
+          "value": 4,
+          "sub_criteria": [
+            {
+              "id": "official_mcp",
+              "met": true,
+              "evidence": "https://devblogs.microsoft.com/microsoft365dev/build-declarative-agents-for-microsoft-365-copilot-with-mcp/",
+              "note": "Microsoft 365 Copilot Studio [supports MCP](https://devblogs.microsoft.com/microsoft365dev/build-declarative-agents-for-microsoft-365-copilot-with-mcp/) (GA 2025)"
+            },
+            {
+              "id": "public_ai_api",
+              "met": true,
+              "evidence": "https://devblogs.microsoft.com/microsoft365dev/build-declarative-agents-for-microsoft-365-copilot-with-mcp/",
+              "note": "Copilot Studio programmable agents"
+            },
+            {
+              "id": "agent_entity_lifecycle",
+              "met": false,
+              "note": "Project Manager agent has no public developer API"
+            },
+            {
+              "id": "production_signals",
+              "met": true,
+              "evidence": "https://devblogs.microsoft.com/microsoft365dev/build-declarative-agents-for-microsoft-365-copilot-with-mcp/",
+              "note": "M365 Copilot ecosystem partnerships"
+            }
+          ]
+        }
+      },
+      "bottom_line": "Planner is a narrow surface inside Graph. 2025 unification brought premium plans into the UI but not the API. Copilot Studio MCP support is the bright spot.",
+      "gotcha": "`percentComplete` is 0/50/100 only; Graph webhooks don't include Planner; premium plans API-inaccessible",
+      "verified_at": "2026-04-19"
     }
   ]
 }

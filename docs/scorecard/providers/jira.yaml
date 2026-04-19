@@ -1,0 +1,115 @@
+name: Jira
+slug: jira
+verified_at: "2026-04-19"
+best_for: "Enterprise, custom fields"
+bottom_line: "Jira leads overall — 2025's MCP + Rovo rollout flipped its historically weakest dimension into its strongest. ADF and no first-party SDK remain real papercuts."
+gotcha: "ADF description format still mandatory on v3 — requires converter"
+
+scores:
+  api_completeness:
+    sub_criteria:
+      - id: task_crud
+        met: true
+        evidence: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/
+        note: "Full task CRUD via [Issues API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/)"
+      - id: container_crud
+        met: true
+        evidence: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-projects/
+        note: "Full project CRUD via [Projects API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-projects/)"
+      - id: core_fields_80pct
+        met: true
+        evidence: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-fields/
+        note: "13/14 native fields (`start_date` via `customfield_10015`, not guaranteed)"
+      - id: native_subtasks
+        met: true
+        evidence: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/
+        note: "Native subtasks (`parent.key` + subtask issuetype)"
+      - id: no_ops_gap
+        met: true
+        evidence: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-bulk-operations/
+        note: "No major ops gaps — [bulk create/edit/delete/transition](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-bulk-operations/)"
+
+  api_ergonomics:
+    sub_criteria:
+      - id: single_api_model
+        met: true
+        evidence: https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/
+        note: "Single REST v3 model — [v3 intro](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/) (v2 deprecated)"
+      - id: vendor_sdk_fresh
+        met: false
+        note: "No first-party JS/TS SDK — [`jira.js`](https://github.com/MrRefactoring/jira.js) is community"
+      - id: changelog_active
+        met: true
+        evidence: https://developer.atlassian.com/cloud/jira/platform/changelog/
+        note: "[Changelog](https://developer.atlassian.com/cloud/jira/platform/changelog/) active"
+      - id: standard_richtext
+        met: false
+        note: "ADF (Atlassian Document Format) for rich text — proprietary JSON tree; [JRACLOUD-77436](https://jira.atlassian.com/browse/JRACLOUD-77436) (Markdown API) still unresolved"
+      - id: standard_pagination
+        met: true
+        evidence: https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/
+        note: "Cursor-paged `/search/jql` — replaced deprecated `/search` on 2025-10-31"
+
+  schema_flexibility:
+    band: 5
+    justification: "Unlimited typed custom fields with dynamic schema — [Fields API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-fields/). Soft guidance ≤ 1,000 fields/instance for performance; no hard cap."
+    evidence: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-fields/
+
+  rate_limits:
+    effective_ops_per_min: 1083
+    tier_scored: "site-wide (all plans)"
+    formula: "65,000 points/hour ÷ 1 pt/GET × 1/60 min ≈ 1,083 ops/min"
+    justification: "[65,000 points/hour per site](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/). Bulk endpoints push effective throughput higher (50 issues per bulk-create, 1,000 IDs per bulk-edit)."
+    evidence: https://developer.atlassian.com/cloud/jira/platform/rate-limiting/
+
+  real_time:
+    band: 5
+    event_count: 30
+    justification: "30+ [webhook event identifiers](https://developer.atlassian.com/cloud/jira/platform/webhooks/) covering issues, comments, worklogs, sprints, projects, users, versions, attachments. Retry semantics documented."
+    evidence: https://developer.atlassian.com/cloud/jira/platform/webhooks/
+
+  auth_simplicity:
+    sub_criteria:
+      - id: pat
+        met: true
+        evidence: https://id.atlassian.com/manage-profile/security/api-tokens
+        note: "[API token](https://id.atlassian.com/manage-profile/security/api-tokens) (basic auth)"
+      - id: oauth2
+        met: true
+        evidence: https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/
+        note: "[OAuth 2.0 3LO](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/)"
+      - id: pat_self_serve
+        met: true
+        evidence: https://id.atlassian.com/manage-profile/security/api-tokens
+        note: "Token self-serve from Atlassian profile"
+      - id: oauth_self_serve
+        met: false
+        note: "OAuth app registration requires Atlassian developer console + scope config"
+      - id: enterprise_auth
+        met: true
+        evidence: https://developer.atlassian.com/cloud/jira/platform/getting-started-with-connect/
+        note: "[Connect](https://developer.atlassian.com/cloud/jira/platform/getting-started-with-connect/) / [Forge](https://developer.atlassian.com/platform/forge/) for enterprise"
+
+  data_portability:
+    band: 4
+    justification: "Full API coverage + bulk endpoints. No single \"export everything\" endpoint; admin CSV/JSON export exists via console but is not API-first."
+    evidence: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-bulk-operations/
+
+  ai_agent_readiness:
+    sub_criteria:
+      - id: official_mcp
+        met: true
+        evidence: https://www.atlassian.com/platform/remote-mcp-server
+        note: "[Atlassian Remote MCP Server](https://www.atlassian.com/platform/remote-mcp-server) — GA 2025, Cloudflare-hosted, OAuth 2.1"
+      - id: public_ai_api
+        met: true
+        evidence: https://developer.atlassian.com/platform/forge/manifest-reference/modules/rovo-agent/
+        note: "Rovo Agents public API — Forge [`rovo-agent` module](https://developer.atlassian.com/platform/forge/manifest-reference/modules/rovo-agent/)"
+      - id: agent_entity_lifecycle
+        met: true
+        evidence: https://developer.atlassian.com/platform/forge/manifest-reference/modules/rovo-agent/
+        note: "Rovo agents assignable as Jira assignees (beta Feb 2026)"
+      - id: production_signals
+        met: true
+        evidence: https://www.atlassian.com/platform/remote-mcp-server
+        note: "Atlassian-led Claude / Rovo integration + published Rovo case studies"

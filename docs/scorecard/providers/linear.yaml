@@ -1,0 +1,117 @@
+name: Linear
+slug: linear
+verified_at: "2026-04-19"
+best_for: "AI agents, modern DX"
+bottom_line: "Linear remains the DX leader and has the most mature agent primitives (sessions, actor-based auth). Lack of custom fields is the only real weakness."
+gotcha: "Hard ceiling on custom fields (labels + Asks only); estimate is points, not hours"
+
+scores:
+  api_completeness:
+    sub_criteria:
+      - id: task_crud
+        met: true
+        evidence: https://linear.app/developers/graphql
+        note: "Full issue CRUD — [GraphQL](https://linear.app/developers/graphql)"
+      - id: container_crud
+        met: true
+        evidence: https://linear.app/developers/graphql
+        note: "Full project CRUD"
+      - id: core_fields_80pct
+        met: false
+        note: "11/14 native (78.5% — just under 80%; `start_date` is read-only `startedAt`, `estimated_hours` is unitless points, `logged_hours` missing)"
+      - id: native_subtasks
+        met: true
+        evidence: https://linear.app/developers/graphql
+        note: "Native sub-issues (`Issue.parent`)"
+      - id: no_ops_gap
+        met: true
+        evidence: https://linear.app/developers/graphql
+        note: "No ops gaps"
+
+  api_ergonomics:
+    sub_criteria:
+      - id: single_api_model
+        met: true
+        evidence: https://linear.app/developers/graphql
+        note: "Single GraphQL model"
+      - id: vendor_sdk_fresh
+        met: true
+        evidence: https://www.npmjs.com/package/@linear/sdk
+        note: "[`@linear/sdk`](https://www.npmjs.com/package/@linear/sdk) v80.1.0 — first-party TS, active"
+      - id: changelog_active
+        met: true
+        evidence: https://linear.app/changelog
+        note: "[Changelog](https://linear.app/changelog) with `[API]` prefix for API entries"
+      - id: standard_richtext
+        met: true
+        evidence: https://linear.app/developers/graphql
+        note: "Markdown descriptions"
+      - id: standard_pagination
+        met: true
+        evidence: https://linear.app/developers/graphql
+        note: "Cursor pagination"
+
+  schema_flexibility:
+    band: 2
+    justification: "No arbitrary user-defined custom fields. Extensibility = labels, projects, cycles, and (June 2025) [Asks fields](https://linear.app/changelog/2025-06-05-asks-fields-and-triage-routing) scoped to triage — not general-purpose."
+    evidence: https://linear.app/changelog/2025-06-05-asks-fields-and-triage-routing
+
+  rate_limits:
+    effective_ops_per_min: 833
+    tier_scored: "API key"
+    formula: "5,000 req/hr × 10 aliases ÷ 60 min ≈ 833 ops/min"
+    justification: "[5,000 req/hr + 3M complexity pts/hr](https://linear.app/developers/rate-limiting) on API keys; 10,000 pts max per query. At 10-alias typical batch → effective ~830 ops/min. Complexity budget lets denser queries fetch hundreds of items per request."
+    evidence: https://linear.app/developers/rate-limiting
+
+  real_time:
+    band: 5
+    event_count: 40
+    justification: "14 entity types × 3 action types + specialized (Issue SLA, OAuthApp revoked, **Agent session events**) = 40+ [webhook events](https://linear.app/developers/webhooks)."
+    evidence: https://linear.app/developers/webhooks
+
+  auth_simplicity:
+    sub_criteria:
+      - id: pat
+        met: true
+        evidence: https://linear.app/developers/oauth-2-0-authentication
+        note: "[Personal API keys](https://linear.app/developers/oauth-2-0-authentication)"
+      - id: oauth2
+        met: true
+        evidence: https://linear.app/developers/oauth-2-0-authentication
+        note: "[OAuth 2.0](https://linear.app/developers/oauth-2-0-authentication)"
+      - id: pat_self_serve
+        met: true
+        evidence: https://linear.app/developers/oauth-2-0-authentication
+        note: "PAT self-serve"
+      - id: oauth_self_serve
+        met: true
+        evidence: https://linear.app/developers/oauth-2-0-authentication
+        note: "OAuth app registration self-serve"
+      - id: enterprise_auth
+        met: true
+        evidence: https://linear.app/developers/oauth-actor-authorization
+        note: "[OAuth actor authorization](https://linear.app/developers/oauth-actor-authorization) for agents/apps as actors"
+
+  data_portability:
+    band: 4
+    justification: "Full GraphQL coverage — everything is fetchable via paged queries. No dedicated bulk-export endpoint."
+    evidence: https://linear.app/developers/graphql
+
+  ai_agent_readiness:
+    sub_criteria:
+      - id: official_mcp
+        met: true
+        evidence: https://linear.app/docs/mcp
+        note: "[Linear MCP server](https://linear.app/docs/mcp) — hosted, find/create/update for issues/projects/comments"
+      - id: public_ai_api
+        met: true
+        evidence: https://linear.app/now/our-approach-to-building-the-agent-interaction-sdk
+        note: "[Agent Interaction SDK](https://linear.app/now/our-approach-to-building-the-agent-interaction-sdk) (Developer Preview)"
+      - id: agent_entity_lifecycle
+        met: true
+        evidence: https://linear.app/developers/agents
+        note: "[Agent Sessions API](https://linear.app/developers/agents) — agents as first-class users with session lifecycle"
+      - id: production_signals
+        met: true
+        evidence: https://linear.app/developers/agents
+        note: "Published case studies (Rivet May 2025, Reflag) + webhook event category for agents"

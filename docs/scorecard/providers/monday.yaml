@@ -1,0 +1,115 @@
+name: Monday.com
+slug: monday
+verified_at: "2026-04-19"
+best_for: "Dynamic schemas"
+bottom_line: "Dynamic column schema that penalized completeness is precisely what makes flexibility and rate limits excellent. First-party MCP closes the AI gap."
+gotcha: "Dynamic column schema — adapter must introspect each board before mapping"
+
+scores:
+  api_completeness:
+    sub_criteria:
+      - id: task_crud
+        met: true
+        evidence: https://developer.monday.com/api-reference/reference/items
+        note: "Full item CRUD"
+      - id: container_crud
+        met: true
+        evidence: https://developer.monday.com/api-reference/reference/boards
+        note: "Full board/group CRUD"
+      - id: core_fields_80pct
+        met: false
+        note: "5/14 native (id, title, parent_id, created_at, updated_at); all other fields require column-type custom fields"
+      - id: native_subtasks
+        met: true
+        evidence: https://developer.monday.com/api-reference/reference/subitems
+        note: "Native subitems (`create_subitem`)"
+      - id: no_ops_gap
+        met: true
+        evidence: https://developer.monday.com/api-reference/reference/items
+        note: "No ops gaps"
+
+  api_ergonomics:
+    sub_criteria:
+      - id: single_api_model
+        met: true
+        evidence: https://developer.monday.com/api-reference/docs/basics
+        note: "Single GraphQL model"
+      - id: vendor_sdk_fresh
+        met: true
+        evidence: https://www.npmjs.com/package/monday-sdk-js
+        note: "[`monday-sdk-js`](https://www.npmjs.com/package/monday-sdk-js) — first-party TS/JS"
+      - id: changelog_active
+        met: true
+        evidence: https://developer.monday.com/api-reference/changelog
+        note: "[Changelog](https://developer.monday.com/api-reference/changelog) active"
+      - id: standard_richtext
+        met: true
+        evidence: https://developer.monday.com/api-reference/reference/column-types-reference
+        note: "Text / long-text column types in standard formats"
+      - id: standard_pagination
+        met: true
+        evidence: https://developer.monday.com/api-reference/docs/basics
+        note: "Cursor pagination"
+
+  schema_flexibility:
+    band: 5
+    justification: "Fully dynamic schema — 27+ [column types](https://developer.monday.com/api-reference/reference/column-types-reference) including status, dropdown, text, long_text, numbers, date, timeline, people, tags, checkbox, link, email, phone, rating, color_picker, dependency, file, formula, mirror, connect_boards, subitems, time_tracking, hour, location, vote, world_clock, country. No hard cap on columns per board."
+    evidence: https://developer.monday.com/api-reference/reference/column-types-reference
+
+  rate_limits:
+    effective_ops_per_min: 1000000
+    tier_scored: "Free (personal token, plan-independent programmatic path)"
+    formula: "Personal token 1M pts/min on Free ÷ 1 pt/op (GET) = 1,000,000 ops/min"
+    justification: "Personal token [10M complexity pts/min](https://developer.monday.com/api-reference/docs/rate-limits) (1M Free/Trial). `create_item` ≈ 10k pts → ≈ 1,000 writes/min; reads far more. Daily call caps apply at low tiers but complexity is the binding constraint for integrations."
+    evidence: https://developer.monday.com/api-reference/docs/rate-limits
+
+  real_time:
+    band: 4
+    event_count: 15
+    justification: "~15+ [webhook events](https://developer.monday.com/api-reference/reference/webhooks) including `change_column_value`, `change_status_column_value`, `create_item`, `create_subitem`, `item_archived/deleted/moved`, `create_update`, plus 12 app-lifecycle events. Board-scoped registration."
+    evidence: https://developer.monday.com/api-reference/reference/webhooks
+
+  auth_simplicity:
+    sub_criteria:
+      - id: pat
+        met: true
+        evidence: https://developer.monday.com/api-reference/docs/authentication
+        note: "V2 personal API tokens"
+      - id: oauth2
+        met: true
+        evidence: https://developer.monday.com/apps/docs/oauth
+        note: "[OAuth 2.0](https://developer.monday.com/apps/docs/oauth)"
+      - id: pat_self_serve
+        met: true
+        evidence: https://developer.monday.com/api-reference/docs/authentication
+        note: "PAT self-serve"
+      - id: oauth_self_serve
+        met: true
+        evidence: https://developer.monday.com/apps/docs/oauth
+        note: "OAuth app self-serve"
+      - id: enterprise_auth
+        met: false
+        note: "No service-account / SSO-integrated token for enterprise (OAuth-only path)"
+
+  data_portability:
+    band: 3
+    justification: "Full GraphQL API. No dedicated bulk export; board-based model requires per-board schema introspection before extraction."
+    evidence: https://developer.monday.com/api-reference/docs/basics
+
+  ai_agent_readiness:
+    sub_criteria:
+      - id: official_mcp
+        met: true
+        evidence: https://github.com/mondaycom/mcp
+        note: "[`@mondaydotcomorg/monday-api-mcp`](https://github.com/mondaycom/mcp) — first-party, ~15 tools + dynamic GraphQL beta"
+      - id: public_ai_api
+        met: true
+        evidence: https://monday.com/w/mcp
+        note: "[Sidekick](https://monday.com/w/mcp), Vibe, AI Blocks — programmable AI surface"
+      - id: agent_entity_lifecycle
+        met: false
+        note: "No agent-specific entity/lifecycle documented"
+      - id: production_signals
+        met: true
+        evidence: https://monday.com/w/mcp
+        note: "Hosted MCP integrations with Claude / Cursor / Copilot"

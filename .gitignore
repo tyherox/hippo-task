@@ -5,3 +5,11 @@ dist/
 .DS_Store
 .env
 .env.local
+
+# Per-user Claude Code overrides (settings.json is shared, .local is not)
+.claude/settings.local.json
+
+# Local HippoTask MCP task storage — agent scratch state, not team-shared.
+# Remove these lines if your team wants tasks committed and synced via git.
+.hippotask/*
+!.hippotask/README.md

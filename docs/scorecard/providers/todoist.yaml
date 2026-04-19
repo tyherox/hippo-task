@@ -1,0 +1,114 @@
+name: Todoist
+slug: todoist
+verified_at: "2026-04-19"
+best_for: "Personal tasks"
+bottom_line: "Simple but well-rounded — Sync API batching rewards batch-capable clients, unified v1 fixed the move-task gotcha. Labels-only schema is the ceiling."
+gotcha: "No `status` field beyond done/not-done; no start_date; no logged_hours"
+
+scores:
+  api_completeness:
+    sub_criteria:
+      - id: task_crud
+        met: true
+        evidence: https://developer.todoist.com/api/v1/
+        note: "Full task CRUD — [unified v1](https://developer.todoist.com/api/v1/)"
+      - id: container_crud
+        met: true
+        evidence: https://developer.todoist.com/api/v1/
+        note: "Full project CRUD"
+      - id: core_fields_80pct
+        met: false
+        note: "9/14 native (no status beyond `is_completed`/`checked`; no `start_date`; no `logged_hours`; `updated_at` not consistently exposed)"
+      - id: native_subtasks
+        met: true
+        evidence: https://developer.todoist.com/api/v1/
+        note: "Native subtasks (`parent_id`)"
+      - id: no_ops_gap
+        met: true
+        evidence: https://developer.todoist.com/api/v1/
+        note: "`move_task` command — historical \"can't move between projects\" gotcha is fixed"
+
+  api_ergonomics:
+    sub_criteria:
+      - id: single_api_model
+        met: true
+        evidence: https://developer.todoist.com/api/v1/
+        note: "Single unified v1 model (REST v2 + Sync v9 deprecating early 2026)"
+      - id: vendor_sdk_fresh
+        met: true
+        evidence: https://github.com/Doist/todoist-api-typescript
+        note: "[`@doist/todoist-api-typescript`](https://github.com/Doist/todoist-api-typescript) v9.3 (2026-04-18), [`todoist-api-python`](https://github.com/Doist/todoist-api-python) v4.x — both first-party, active"
+      - id: changelog_active
+        met: true
+        evidence: https://groups.google.com/a/doist.com/g/todoist-api
+        note: "[Changelog](https://groups.google.com/a/doist.com/g/todoist-api) (Google Group)"
+      - id: standard_richtext
+        met: true
+        evidence: https://developer.todoist.com/api/v1/
+        note: "Markdown descriptions"
+      - id: standard_pagination
+        met: true
+        evidence: https://developer.todoist.com/api/v1/
+        note: "Cursor pagination"
+
+  schema_flexibility:
+    band: 2
+    justification: "Labels only — no user-defined custom fields."
+    evidence: https://developer.todoist.com/api/v1/
+
+  rate_limits:
+    effective_ops_per_min: 6700
+    tier_scored: "per-user (all plans)"
+    formula: "1,000 req / 15 min ≈ 67 rpm × 100 commands/sync = 6,700 ops/min"
+    justification: "[1,000 req / 15 min REST](https://developer.todoist.com/api/v1/) ≈ 67 rpm, but `/sync` batches up to **100 commands per request** → effective 6,700 ops/min — band 5."
+    evidence: https://developer.todoist.com/api/v1/
+
+  real_time:
+    band: 4
+    event_count: 15
+    justification: "[Webhooks](https://developer.todoist.com/api/v1/#tag/Webhooks) with HMAC-SHA256 signature. Events: `item:added|updated|deleted|completed|uncompleted`, `note:*`, `project:*`, `label:*`, `filter:*`, `reminder:fired`. ~15+ events."
+    evidence: https://developer.todoist.com/api/v1/#tag/Webhooks
+
+  auth_simplicity:
+    sub_criteria:
+      - id: pat
+        met: true
+        evidence: https://developer.todoist.com/api/v1/#tag/Authentication
+        note: "Personal API token"
+      - id: oauth2
+        met: true
+        evidence: https://developer.todoist.com/api/v1/#tag/Authentication
+        note: "[OAuth 2.0](https://developer.todoist.com/api/v1/#tag/Authentication)"
+      - id: pat_self_serve
+        met: true
+        evidence: https://developer.todoist.com/api/v1/#tag/Authentication
+        note: "Token self-serve"
+      - id: oauth_self_serve
+        met: true
+        evidence: https://developer.todoist.com/api/v1/#tag/Authentication
+        note: "OAuth self-serve"
+      - id: enterprise_auth
+        met: false
+        note: "No dedicated enterprise auth tier"
+
+  data_portability:
+    band: 4
+    justification: "Full API + `/sync` full-snapshot endpoint (100 full-sync req / 15 min)."
+    evidence: https://developer.todoist.com/api/v1/
+
+  ai_agent_readiness:
+    sub_criteria:
+      - id: official_mcp
+        met: true
+        evidence: https://github.com/Doist/todoist-ai
+        note: "[Doist MCP server](https://github.com/Doist/todoist-ai) — hosted at `https://ai.todoist.net/mcp`, streamable HTTP, OAuth"
+      - id: public_ai_api
+        met: false
+        note: "No separate agent API"
+      - id: agent_entity_lifecycle
+        met: false
+        note: "No agent entity"
+      - id: production_signals
+        met: true
+        evidence: https://github.com/Doist/todoist-ai
+        note: "Official MCP adoption + ecosystem directory listings"

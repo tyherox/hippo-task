@@ -6,9 +6,7 @@ import type { HippoPerson } from "../schema/person.js";
 import type { HippoCustomField } from "../schema/custom-field.js";
 import { generateId } from "../utils/id.js";
 import { nowISO } from "../utils/dates.js";
-
-/** Current schema version for new tasks/projects. */
-const CURRENT_SCHEMA_VERSION = "1.0.0";
+import { CURRENT_SCHEMA_VERSION } from "../versioning/versions.js";
 
 /** Default status for new tasks. */
 const DEFAULT_STATUS: HippoStatus = "todo";

@@ -1,0 +1,116 @@
+name: GitHub
+slug: github
+verified_at: "2026-04-19"
+best_for: "Open source, data portability"
+bottom_line: "GitHub holds 4.4. Strong everywhere except schema flex, with the dual Issues/ProjectsV2 model as its enduring ergonomic cost."
+gotcha: "Dual model (Issues REST + ProjectsV2 GraphQL) multiplies API surface"
+
+scores:
+  api_completeness:
+    sub_criteria:
+      - id: task_crud
+        met: true
+        evidence: https://docs.github.com/en/rest/issues/issues
+        note: "Full issue CRUD — [REST Issues](https://docs.github.com/en/rest/issues/issues)"
+      - id: container_crud
+        met: true
+        evidence: https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects
+        note: "Full ProjectsV2 CRUD — [GraphQL](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects)"
+      - id: core_fields_80pct
+        met: false
+        note: "8/14 native (priority, due_date, start_date, estimated_hours, logged_hours all require ProjectsV2 custom fields; issue `state` is binary not full status)"
+      - id: native_subtasks
+        met: true
+        evidence: https://github.blog/changelog/2024-12-12-github-issues-projects-close-issue-as-a-duplicate-rest-api-for-sub-issues-and-more/
+        note: "Native sub-issues REST API — [GA Dec 2024](https://github.blog/changelog/2024-12-12-github-issues-projects-close-issue-as-a-duplicate-rest-api-for-sub-issues-and-more/)"
+      - id: no_ops_gap
+        met: true
+        evidence: https://docs.github.com/en/rest/issues/issues
+        note: "No ops gaps — issues moveable across projects"
+
+  api_ergonomics:
+    sub_criteria:
+      - id: single_api_model
+        met: false
+        note: "Dual model — REST for Issues, GraphQL-only for ProjectsV2"
+      - id: vendor_sdk_fresh
+        met: true
+        evidence: https://github.com/octokit
+        note: "[Octokit](https://github.com/octokit) — first-party JS/TS, Ruby, Go, .NET (no official Python; PyGithub is community)"
+      - id: changelog_active
+        met: true
+        evidence: https://github.blog/changelog/
+        note: "[Changelog](https://github.blog/changelog/) + [breaking changes](https://docs.github.com/en/rest/about-the-rest-api/breaking-changes)"
+      - id: standard_richtext
+        met: true
+        evidence: https://docs.github.com/en/get-started/writing-on-github
+        note: "Markdown bodies throughout"
+      - id: standard_pagination
+        met: true
+        evidence: https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api
+        note: "Standard cursor pagination (GraphQL) / Link-header pagination (REST)"
+
+  schema_flexibility:
+    band: 3
+    justification: "ProjectsV2 supports 5 typed field types (text, number, date, single-select, iteration) with 50-option cap on single-select; no `updateProjectV2Field` mutation (option edits are delete+recreate = data loss). Custom fields are project-scoped, not issue-scoped. [Understanding fields](https://docs.github.com/en/issues/planning-and-tracking-with-projects/understanding-fields)"
+    evidence: https://docs.github.com/en/issues/planning-and-tracking-with-projects/understanding-fields
+
+  rate_limits:
+    effective_ops_per_min: 833
+    tier_scored: "PAT authenticated"
+    formula: "REST 5,000/hr = 83 rpm; GraphQL 5,000 pts/hr × 10 aliases = 833 ops/min"
+    justification: "[REST PAT: 5,000/hr](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api); [GraphQL: 5,000 points/hr](https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api). With GraphQL aliased multi-mutation, effective throughput ≈ 830 ops/min (83 req/min × 10 typical aliases). Enterprise Cloud raises to 10,000–15,000/hr."
+    evidence: https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api
+
+  real_time:
+    band: 5
+    event_count: 60
+    justification: "~60 [webhook event types](https://docs.github.com/en/webhooks/webhook-events-and-payloads) including `issues`, `issue_comment`, `projects_v2*`, `sub_issues`. Documented retry semantics."
+    evidence: https://docs.github.com/en/webhooks/webhook-events-and-payloads
+
+  auth_simplicity:
+    sub_criteria:
+      - id: pat
+        met: true
+        evidence: https://github.blog/changelog/2025-03-18-fine-grained-pats-are-now-generally-available/
+        note: "Classic PAT + [fine-grained PAT](https://github.blog/changelog/2025-03-18-fine-grained-pats-are-now-generally-available/) (GA 2025-03-18)"
+      - id: oauth2
+        met: true
+        evidence: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps
+        note: "[OAuth App](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps) + [GitHub App](https://docs.github.com/en/apps/creating-github-apps)"
+      - id: pat_self_serve
+        met: true
+        evidence: https://github.com/settings/tokens
+        note: "Self-serve PAT"
+      - id: oauth_self_serve
+        met: true
+        evidence: https://docs.github.com/en/apps/creating-github-apps
+        note: "Self-serve OAuth / App registration"
+      - id: enterprise_auth
+        met: true
+        evidence: https://docs.github.com/en/apps/creating-github-apps
+        note: "GitHub App installations for enterprise"
+
+  data_portability:
+    band: 5
+    justification: "Full API + Git-native storage (inherently portable) + documented [migration tooling](https://docs.github.com/en/migrations)."
+    evidence: https://docs.github.com/en/migrations
+
+  ai_agent_readiness:
+    sub_criteria:
+      - id: official_mcp
+        met: true
+        evidence: https://github.com/github/github-mcp-server
+        note: "[github/github-mcp-server](https://github.com/github/github-mcp-server) — v1.0.0 GA 2026-04-16, issues + projects + repo surface"
+      - id: public_ai_api
+        met: true
+        evidence: https://github.blog/changelog/2025-09-25-copilot-coding-agent-is-now-generally-available/
+        note: "Copilot coding agent [GA 2025-09-25](https://github.blog/changelog/2025-09-25-copilot-coding-agent-is-now-generally-available/) — assignable to issues"
+      - id: agent_entity_lifecycle
+        met: true
+        evidence: https://github.blog/changelog/2025-09-25-copilot-coding-agent-is-now-generally-available/
+        note: "Copilot-as-assignee (agent-as-user pattern)"
+      - id: production_signals
+        met: true
+        evidence: https://www.infoq.com/news/2026/04/github-copilot-cli-ga/
+        note: "[Copilot CLI GA](https://www.infoq.com/news/2026/04/github-copilot-cli-ga/) March 2026; broad agent-host partnerships"

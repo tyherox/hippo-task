@@ -1,0 +1,65 @@
+{
+  "id": "019470e1-3a4c-7f1c-8a5e-2b3c4d5e6f7a",
+  "external_ids": {
+    "jira": "PROJ-1234",
+    "linear": "ENG-567",
+    "github": "acme/api#89"
+  },
+  "title": "Implement OAuth 2.0 login flow",
+  "description": "## Requirements\n\n- Google and GitHub providers\n- Email/password fallback\n- Session persists across reloads\n\n### Acceptance criteria\n- [ ] Login page renders\n- [ ] OAuth callback handled\n- [ ] CSRF protection in place",
+  "description_format": "markdown",
+  "status": "in_progress",
+  "status_raw": "In Progress",
+  "priority": "high",
+  "priority_raw": "P1",
+  "assignees": [
+    {
+      "id": "person-alice",
+      "name": "Alice Johnson",
+      "email": "alice@example.com",
+      "external_ids": {
+        "linear": "usr_abc123",
+        "jira": "5f8a0b9c"
+      }
+    }
+  ],
+  "creator": {
+    "id": "person-bob",
+    "name": "Bob Smith",
+    "email": "bob@example.com"
+  },
+  "created_at": "2026-04-15T09:00:00Z",
+  "updated_at": "2026-04-19T14:30:00Z",
+  "start_date": "2026-04-20T09:00:00Z",
+  "due_date": "2026-04-30T17:00:00Z",
+  "completed_at": "2026-04-19T13:00:00Z",
+  "project_id": "019470e1-3a4c-7f1c-8a5e-1111111111aa",
+  "parent_id": "019470e1-3a4c-7f1c-8a5e-2222222222bb",
+  "labels": ["feature", "auth", "backend"],
+  "estimate": 8,
+  "estimate_unit": "points",
+  "custom_fields": {
+    "sprint": {
+      "label": "Sprint",
+      "type": "string",
+      "value": "Sprint 42"
+    },
+    "story_points": {
+      "label": "Story Points",
+      "type": "number",
+      "value": 5
+    },
+    "team": {
+      "label": "Team",
+      "type": "select",
+      "value": "platform",
+      "options": ["platform", "growth", "infra"]
+    }
+  },
+  "metadata": {
+    "jira.issueType": "Story",
+    "jira.customfield_10016": 8,
+    "linear.projectId": "proj_abc123"
+  },
+  "schema_version": "1.0.0"
+}

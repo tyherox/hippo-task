@@ -23,6 +23,18 @@
     "schema:generate": {
       "dependsOn": ["build"],
       "outputs": ["schema/**"]
+    },
+    "scorecard:generate": {
+      "cache": false,
+      "outputs": []
+    },
+    "scorecard:validate": {
+      "cache": false,
+      "outputs": []
+    },
+    "scorecard:check-links": {
+      "cache": false,
+      "outputs": []
     }
   }
 }

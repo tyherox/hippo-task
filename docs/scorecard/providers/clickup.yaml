@@ -1,0 +1,115 @@
+name: ClickUp
+slug: clickup
+verified_at: "2026-04-19"
+best_for: "Feature coverage"
+bottom_line: "Completeness leader (14/14 native) with MCP and Super Agents closing the AI gap. Free-tier rate limit and no first-party SDK are the drag."
+gotcha: "Free/Unlimited/Business = 100 rpm; realistic sync needs Business Plus (1k rpm)"
+
+scores:
+  api_completeness:
+    sub_criteria:
+      - id: task_crud
+        met: true
+        evidence: https://developer.clickup.com/docs/tasks
+        note: "Full task CRUD"
+      - id: container_crud
+        met: true
+        evidence: https://developer.clickup.com/reference/
+        note: "Full list/folder/space CRUD"
+      - id: core_fields_80pct
+        met: true
+        evidence: https://developer.clickup.com/docs/tasks
+        note: "14/14 native (rare — includes native time-tracking read/write)"
+      - id: native_subtasks
+        met: true
+        evidence: https://developer.clickup.com/docs/tasks
+        note: "Native subtasks"
+      - id: no_ops_gap
+        met: true
+        evidence: https://developer.clickup.com/docs/tasks
+        note: "Tasks moveable across lists"
+
+  api_ergonomics:
+    sub_criteria:
+      - id: single_api_model
+        met: true
+        evidence: https://developer.clickup.com/
+        note: "REST v2 stable, v3 endpoints [shipping gradually](https://developer.clickup.com/) (dual version adds minor confusion)"
+      - id: vendor_sdk_fresh
+        met: false
+        note: "No first-party SDK (community only: `clickup-python-sdk`, `pyclickup`)"
+      - id: changelog_active
+        met: true
+        evidence: https://feedback.clickup.com/changelog/api-v2
+        note: "[Changelog](https://feedback.clickup.com/changelog/api-v2)"
+      - id: standard_richtext
+        met: true
+        evidence: https://developer.clickup.com/docs/tasks
+        note: "`markdown_description` supported"
+      - id: standard_pagination
+        met: true
+        evidence: https://developer.clickup.com/docs/tasks
+        note: "Standard pagination"
+
+  schema_flexibility:
+    band: 5
+    justification: "~18 [custom field types](https://developer.clickup.com/docs/customfields) (text, number, currency, date, checkbox, email, phone, URL, dropdown, labels, rating, progress, people, tasks, location, emoji, formula, files). 500 options per dropdown/label. Free tier capped at 60 total field uses; paid unlimited."
+    evidence: https://developer.clickup.com/docs/customfields
+
+  rate_limits:
+    effective_ops_per_min: 100
+    tier_scored: "Free / Unlimited / Business"
+    formula: "100 rpm at entry tiers (Business Plus 1,000 rpm would score band 5; Enterprise 10,000 rpm)"
+    justification: "[Per-token, per-minute](https://developer.clickup.com/docs/rate-limits): Free/Unlimited/Business = **100 rpm**, Business Plus = 1,000, Enterprise = 10,000. Score at Free = band 2. Business Plus would be band 5."
+    evidence: https://developer.clickup.com/docs/rate-limits
+
+  real_time:
+    band: 4
+    event_count: 20
+    justification: "Comprehensive [webhooks](https://developer.clickup.com/docs/webhooks) — task / list / folder / space / goal / keyResult × create/update/delete plus `*` wildcard. ~20+ events."
+    evidence: https://developer.clickup.com/docs/webhooks
+
+  auth_simplicity:
+    sub_criteria:
+      - id: pat
+        met: true
+        evidence: https://developer.clickup.com/docs/authentication
+        note: "Personal token (`pk_` prefix, never expires)"
+      - id: oauth2
+        met: true
+        evidence: https://developer.clickup.com/docs/authentication
+        note: "[OAuth 2.0](https://developer.clickup.com/docs/authentication)"
+      - id: pat_self_serve
+        met: true
+        evidence: https://developer.clickup.com/docs/authentication
+        note: "PAT self-serve"
+      - id: oauth_self_serve
+        met: true
+        evidence: https://developer.clickup.com/docs/authentication
+        note: "OAuth self-serve"
+      - id: enterprise_auth
+        met: false
+        note: "No dedicated service-account / enterprise-token tier"
+
+  data_portability:
+    band: 3
+    justification: "Full API coverage. No bulk-export endpoint. 5-level hierarchy (Workspace → Space → Folder → List → Task → Subtask) means extraction requires walking the tree."
+    evidence: https://developer.clickup.com/docs/tasks
+
+  ai_agent_readiness:
+    sub_criteria:
+      - id: official_mcp
+        met: true
+        evidence: https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server
+        note: "[Official ClickUp MCP server](https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server) (OAuth-only, task CRUD + Brain context)"
+      - id: public_ai_api
+        met: true
+        evidence: https://clickup.com/blog/mcp-tools/
+        note: "[ClickUp Super Agents](https://clickup.com/blog/mcp-tools/) GA Dec 22, 2025"
+      - id: agent_entity_lifecycle
+        met: false
+        note: "No agent-specific entity pattern"
+      - id: production_signals
+        met: true
+        evidence: https://clickup.com/blog/mcp-tools/
+        note: "2026 roadmap for external MCP tool integration"

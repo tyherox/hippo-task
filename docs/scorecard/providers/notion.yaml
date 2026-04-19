@@ -1,0 +1,114 @@
+name: Notion
+slug: notion
+verified_at: "2026-04-19"
+best_for: "Flexible properties"
+bottom_line: "Notion's 2025 additions (webhooks + MCP + Agents) eliminated its catastrophic ratings. Block-based descriptions and rate limits remain the shape of its ceiling."
+gotcha: "Description = recursive block tree at 3 req/s; 2025-09-03 Data Source split was breaking"
+
+scores:
+  api_completeness:
+    sub_criteria:
+      - id: task_crud
+        met: true
+        evidence: https://developers.notion.com/reference/intro
+        note: "Full page / database CRUD"
+      - id: container_crud
+        met: true
+        evidence: https://developers.notion.com/reference/intro
+        note: "Full workspace / container CRUD"
+      - id: core_fields_80pct
+        met: false
+        note: "11/14 native (priority, estimated_hours, logged_hours via custom properties)"
+      - id: native_subtasks
+        met: true
+        evidence: https://developers.notion.com/reference/intro
+        note: "Native sub-pages via `parent`"
+      - id: no_ops_gap
+        met: false
+        note: "Description as blocks is a real ops gap — no atomic \"set description\""
+
+  api_ergonomics:
+    sub_criteria:
+      - id: single_api_model
+        met: true
+        evidence: https://developers.notion.com/reference/intro
+        note: "Single REST model"
+      - id: vendor_sdk_fresh
+        met: true
+        evidence: https://www.npmjs.com/package/@notionhq/client
+        note: "[`@notionhq/client`](https://www.npmjs.com/package/@notionhq/client) v5.18+ — first-party TS/JS, active"
+      - id: changelog_active
+        met: true
+        evidence: https://developers.notion.com/page/changelog
+        note: "[Changelog](https://developers.notion.com/page/changelog)"
+      - id: standard_richtext
+        met: false
+        note: "Rich-text is Notion blocks (proprietary recursive tree) — no standard Markdown surface"
+      - id: standard_pagination
+        met: true
+        evidence: https://developers.notion.com/reference/intro
+        note: "Standard `start_cursor` / `next_cursor` pagination"
+
+  schema_flexibility:
+    band: 5
+    justification: "20+ [property types](https://developers.notion.com/reference/update-property-schema-object) — title, rich_text, number, select, multi_select, status, date, people, files, checkbox, url, email, phone, formula, relation, rollup, created_time, created_by, last_edited_time, last_edited_by, unique_id. No hard count cap."
+    evidence: https://developers.notion.com/reference/update-property-schema-object
+
+  rate_limits:
+    effective_ops_per_min: 180
+    tier_scored: "per-integration (all plans)"
+    formula: "3 req/s × 60 s = 180 rpm"
+    justification: "[~3 req/s per integration](https://developers.notion.com/reference/request-limits) (token bucket, bursts to 10) — ~180 rpm. No paid tier raises this."
+    evidence: https://developers.notion.com/reference/request-limits
+
+  real_time:
+    band: 3
+    event_count: 10
+    justification: "[Webhooks](https://developers.notion.com/reference/webhooks) shipped (2025+) — lightweight event notifications (re-fetch required). No user / workspace-membership events. Event coverage narrower than Jira / GitHub — band 3."
+    evidence: https://developers.notion.com/reference/webhooks
+
+  auth_simplicity:
+    sub_criteria:
+      - id: pat
+        met: true
+        evidence: https://developers.notion.com/reference/authentication
+        note: "Internal integration tokens (static bearer, single workspace)"
+      - id: oauth2
+        met: true
+        evidence: https://developers.notion.com/docs/authorization
+        note: "[OAuth 2.0](https://developers.notion.com/docs/authorization) public integrations"
+      - id: pat_self_serve
+        met: true
+        evidence: https://developers.notion.com/reference/authentication
+        note: "Internal token self-serve"
+      - id: oauth_self_serve
+        met: true
+        evidence: https://developers.notion.com/docs/authorization
+        note: "OAuth self-serve"
+      - id: enterprise_auth
+        met: true
+        evidence: https://developers.notion.com/docs/authorization
+        note: "Enterprise workspace-level OAuth"
+
+  data_portability:
+    band: 2
+    justification: "API coverage is complete but [2025-09-03 \"Data Source\" split](https://developers.notion.com/docs/upgrade-guide-2025-09-03) was breaking; blocks-based export requires recursive fetching against 3 req/s rate; no dedicated bulk export."
+    evidence: https://developers.notion.com/docs/upgrade-guide-2025-09-03
+
+  ai_agent_readiness:
+    sub_criteria:
+      - id: official_mcp
+        met: true
+        evidence: https://github.com/makenotion/notion-mcp-server
+        note: "[notion-mcp-server v2](https://github.com/makenotion/notion-mcp-server) — first-party, hosted + self-host"
+      - id: public_ai_api
+        met: true
+        evidence: https://developers.notion.com/reference/intro
+        note: "Notion AI readable via normal endpoints"
+      - id: agent_entity_lifecycle
+        met: true
+        evidence: https://www.notion.com/releases/2025-09-18
+        note: "[Notion 3.0 Agents](https://www.notion.com/releases/2025-09-18) — integration-first agent surface (Sep 18, 2025)"
+      - id: production_signals
+        met: false
+        note: "No published major-host partnership cited at time of audit"

@@ -1,0 +1,115 @@
+name: Asana
+slug: asana
+verified_at: "2026-04-19"
+best_for: "Cross-functional teams"
+bottom_line: "Asana's MCP V2 + Service Accounts raise the floor considerably. AI Studio being product-only rather than programmable is the remaining gap."
+gotcha: "Native priority limited to 3 fixed values; rich status still needs a custom field"
+
+scores:
+  api_completeness:
+    sub_criteria:
+      - id: task_crud
+        met: true
+        evidence: https://developers.asana.com/reference/rest-api-reference
+        note: "Full task CRUD"
+      - id: container_crud
+        met: true
+        evidence: https://developers.asana.com/reference/rest-api-reference
+        note: "Full project CRUD"
+      - id: core_fields_80pct
+        met: false
+        note: "11/14 native (status requires custom field; native priority exists but limited to 3 fixed values)"
+      - id: native_subtasks
+        met: true
+        evidence: https://developers.asana.com/reference/rest-api-reference
+        note: "Native subtasks (`parent`)"
+      - id: no_ops_gap
+        met: true
+        evidence: https://developers.asana.com/reference/batch-api
+        note: "Batch API exists but per-request limits apply"
+
+  api_ergonomics:
+    sub_criteria:
+      - id: single_api_model
+        met: true
+        evidence: https://developers.asana.com/reference/rest-api-reference
+        note: "Single REST model"
+      - id: vendor_sdk_fresh
+        met: true
+        evidence: https://www.npmjs.com/package/asana
+        note: "[`asana` on npm](https://www.npmjs.com/package/asana) + [PyPI](https://pypi.org/project/asana/) — first-party, active (Node/Python); Java/PHP/Ruby deprecated"
+      - id: changelog_active
+        met: true
+        evidence: https://forum.asana.com/c/forum-en/api/api-changelog/204
+        note: "[Changelog](https://forum.asana.com/c/forum-en/api/api-changelog/204) (forum category — public, active)"
+      - id: standard_richtext
+        met: true
+        evidence: https://developers.asana.com/reference/rest-api-reference
+        note: "HTML / plain text notes"
+      - id: standard_pagination
+        met: true
+        evidence: https://developers.asana.com/docs/pagination
+        note: "`opt_fields` + cursor pagination"
+
+  schema_flexibility:
+    band: 4
+    justification: "Typed custom fields: text, number, date, single-select, multi-select, people, formula (read-only). [100 fields/project](https://developers.asana.com/docs/custom-fields-guide) (raised from 30). Workspace-scoped."
+    evidence: https://developers.asana.com/docs/custom-fields-guide
+
+  rate_limits:
+    effective_ops_per_min: 150
+    tier_scored: "Free"
+    formula: "150 rpm on Free tier (Paid tier would score band 5 at 1,500 rpm)"
+    justification: "[Free: 150 req/min; Paid: 1,500 req/min](https://developers.asana.com/docs/rate-limits). Score at Free = band 3 (Paid would be band 5). Search capped at 60/min. Duplication jobs capped at 5 concurrent."
+    evidence: https://developers.asana.com/docs/rate-limits
+
+  real_time:
+    band: 4
+    event_count: 15
+    justification: "Resource-level [webhooks](https://developers.asana.com/docs/webhooks-guide) with HMAC signing, exponential-backoff retry, 24h failure expiry. Compact events (re-fetch required). ~15+ event combinations."
+    evidence: https://developers.asana.com/docs/webhooks-guide
+
+  auth_simplicity:
+    sub_criteria:
+      - id: pat
+        met: true
+        evidence: https://developers.asana.com/docs/personal-access-token
+        note: "[PAT](https://developers.asana.com/docs/personal-access-token)"
+      - id: oauth2
+        met: true
+        evidence: https://developers.asana.com/docs/oauth
+        note: "[OAuth 2.0](https://developers.asana.com/docs/oauth)"
+      - id: pat_self_serve
+        met: true
+        evidence: https://developers.asana.com/docs/personal-access-token
+        note: "PAT self-serve"
+      - id: oauth_self_serve
+        met: true
+        evidence: https://developers.asana.com/docs/oauth
+        note: "OAuth self-serve"
+      - id: enterprise_auth
+        met: true
+        evidence: https://developers.asana.com/docs/authentication
+        note: "Service Accounts (Enterprise) — see [Authentication](https://developers.asana.com/docs/authentication)"
+
+  data_portability:
+    band: 4
+    justification: "Full API + batch + CSV export (UI). Tasks-in-multiple-projects adds extraction complexity but is tractable."
+    evidence: https://developers.asana.com/reference/batch-api
+
+  ai_agent_readiness:
+    sub_criteria:
+      - id: official_mcp
+        met: true
+        evidence: https://developers.asana.com/docs/mcp-server
+        note: "[Asana MCP Server V2](https://developers.asana.com/docs/mcp-server) — GA Feb 2026, streamable HTTP, ~42 tools (V1 SSE server sunset 2026-05-11)"
+      - id: public_ai_api
+        met: false
+        note: "AI Studio / Asana Intelligence has no public API"
+      - id: agent_entity_lifecycle
+        met: false
+        note: "No agent-specific entity"
+      - id: production_signals
+        met: true
+        evidence: https://asana.com/inside-asana/fall-release-2025
+        note: "Claude integration (conversations → projects)"

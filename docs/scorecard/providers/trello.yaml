@@ -1,0 +1,108 @@
+name: Trello
+slug: trello
+verified_at: "2026-04-19"
+best_for: "Simple Kanban"
+bottom_line: "Trello is Atlassian's other task product — but nearly none of the Atlassian 2025/2026 AI investment reached it. Simple, stable, real-time solid; schema and AI are weak."
+gotcha: "No subtasks, no priority, OAuth 1.0a only, no Trello-specific MCP"
+
+scores:
+  api_completeness:
+    sub_criteria:
+      - id: task_crud
+        met: true
+        evidence: https://developer.atlassian.com/cloud/trello/rest/
+        note: "Basic card CRUD"
+      - id: container_crud
+        met: true
+        evidence: https://developer.atlassian.com/cloud/trello/rest/
+        note: "Full board / list CRUD"
+      - id: core_fields_80pct
+        met: false
+        note: "9/14 native — no priority, no estimated/logged_hours, `created_at` implicit in ObjectId only"
+      - id: native_subtasks
+        met: false
+        note: "No native subtasks — checklists only (checkItems are not cards; `convertToCardFromCheckItem` breaks parent link)"
+      - id: no_ops_gap
+        met: false
+        note: "Ops gap: status = list position (fragile when users reorder lists)"
+
+  api_ergonomics:
+    sub_criteria:
+      - id: single_api_model
+        met: true
+        evidence: https://developer.atlassian.com/cloud/trello/rest/
+        note: "Single REST `/1/` model (frozen for a decade)"
+      - id: vendor_sdk_fresh
+        met: false
+        note: "No first-party SDK; community [`trello.js`](https://www.npmjs.com/package/trello.js) most actively maintained"
+      - id: changelog_active
+        met: true
+        evidence: https://developer.atlassian.com/cloud/trello/changelog/
+        note: "[Changelog](https://developer.atlassian.com/cloud/trello/changelog/)"
+      - id: standard_richtext
+        met: true
+        evidence: https://developer.atlassian.com/cloud/trello/rest/
+        note: "Markdown `desc`"
+      - id: standard_pagination
+        met: true
+        evidence: https://developer.atlassian.com/cloud/trello/rest/
+        note: "Standard pagination (`before` / `since` / `limit`)"
+
+  schema_flexibility:
+    band: 3
+    justification: "Native [custom fields](https://developer.atlassian.com/cloud/trello/rest/api-group-customfields/) — text, number, date, checkbox, list (dropdown). 5 types puts it in band 3."
+    evidence: https://developer.atlassian.com/cloud/trello/rest/api-group-customfields/
+
+  rate_limits:
+    effective_ops_per_min: 600
+    tier_scored: "per-token"
+    formula: "100 req / 10 s per token × 60 s = 600 rpm"
+    justification: "[300 req / 10s per API key, 100 req / 10s per token](https://developer.atlassian.com/cloud/trello/guides/rest-api/rate-limits/) — binding = 600 rpm/token. > 200 429s per key → key-wide penalty."
+    evidence: https://developer.atlassian.com/cloud/trello/guides/rest-api/rate-limits/
+
+  real_time:
+    band: 5
+    event_count: 30
+    justification: "Model-scoped [webhooks](https://developer.atlassian.com/cloud/trello/guides/rest-api/webhooks/) — rich event list (createCard, updateCard, commentCard, addMemberToCard, updateCheckItem, createList, updateList, copyCard, voteOnCard, etc.) ≥ 30."
+    evidence: https://developer.atlassian.com/cloud/trello/guides/rest-api/webhooks/
+
+  auth_simplicity:
+    sub_criteria:
+      - id: pat
+        met: true
+        evidence: https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/
+        note: "API Key + Token"
+      - id: oauth2
+        met: false
+        note: "OAuth 1.0a only — **no OAuth 2.0** on public REST"
+      - id: pat_self_serve
+        met: true
+        evidence: https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/
+        note: "Token self-serve"
+      - id: oauth_self_serve
+        met: true
+        evidence: https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/
+        note: "OAuth self-serve (dated 1.0a flow)"
+      - id: enterprise_auth
+        met: false
+        note: "No dedicated enterprise auth"
+
+  data_portability:
+    band: 4
+    justification: "Full API + per-board JSON export (UI + API). Simple model = easy extraction."
+    evidence: https://developer.atlassian.com/cloud/trello/rest/
+
+  ai_agent_readiness:
+    sub_criteria:
+      - id: official_mcp
+        met: false
+        note: "No Trello-specific MCP server (Atlassian Rovo / Remote MCP covers Jira/Confluence, not Trello)"
+      - id: public_ai_api
+        met: false
+        note: "No programmable AI API"
+      - id: agent_entity_lifecycle
+        met: false
+        note: "No agent entity"
+      - id: production_signals
+        met: false
+        note: "No published partnerships for Trello specifically"

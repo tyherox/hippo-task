@@ -1,0 +1,111 @@
+name: MS Planner
+slug: ms-planner
+verified_at: "2026-04-19"
+best_for: "Microsoft 365 ecosystem"
+bottom_line: "Planner is a narrow surface inside Graph. 2025 unification brought premium plans into the UI but not the API. Copilot Studio MCP support is the bright spot."
+gotcha: "`percentComplete` is 0/50/100 only; Graph webhooks don't include Planner; premium plans API-inaccessible"
+
+scores:
+  api_completeness:
+    sub_criteria:
+      - id: task_crud
+        met: true
+        evidence: https://learn.microsoft.com/en-us/graph/api/resources/plannertask?view=graph-rest-1.0
+        note: "Full task CRUD — [Planner tasks](https://learn.microsoft.com/en-us/graph/api/resources/plannertask?view=graph-rest-1.0)"
+      - id: container_crud
+        met: true
+        evidence: https://learn.microsoft.com/en-us/graph/api/resources/planner-overview?view=graph-rest-1.0
+        note: "Full plan CRUD"
+      - id: core_fields_80pct
+        met: false
+        note: "9/14 native (no estimated/logged_hours; `percentComplete` limited to 0/50/100 — status is 3-state not 6-state)"
+      - id: native_subtasks
+        met: false
+        note: "No true subtasks (buckets are flat containers; checklist items don't nest)"
+      - id: no_ops_gap
+        met: false
+        note: "Ops gap: premium / Project features API-inaccessible"
+
+  api_ergonomics:
+    sub_criteria:
+      - id: single_api_model
+        met: true
+        evidence: https://learn.microsoft.com/en-us/graph/api/resources/planner-overview?view=graph-rest-1.0
+        note: "Single Graph REST model (v1.0 stable + beta)"
+      - id: vendor_sdk_fresh
+        met: true
+        evidence: https://learn.microsoft.com/en-us/graph/sdks/sdks-overview
+        note: "[Microsoft Graph SDKs](https://learn.microsoft.com/en-us/graph/sdks/sdks-overview) — first-party .NET, JS/TS, Java, Python, Go, PHP, PowerShell"
+      - id: changelog_active
+        met: true
+        evidence: https://learn.microsoft.com/en-us/graph/whats-new-overview
+        note: "[What's new](https://learn.microsoft.com/en-us/graph/whats-new-overview)"
+      - id: standard_richtext
+        met: true
+        evidence: https://learn.microsoft.com/en-us/graph/api/resources/plannertaskdetails?view=graph-rest-1.0
+        note: "HTML (beta) / plain-text descriptions"
+      - id: standard_pagination
+        met: true
+        evidence: https://learn.microsoft.com/en-us/graph/paging
+        note: "`@odata.nextLink` pagination"
+
+  schema_flexibility:
+    band: 2
+    justification: "6 boolean categories (v1.0) / 25 (beta) on `plannerAppliedCategories` — plan-level label descriptions, no typed custom fields."
+    evidence: https://learn.microsoft.com/en-us/graph/api/resources/plannerappliedcategories?view=graph-rest-1.0
+
+  rate_limits:
+    effective_ops_per_min: 780000
+    tier_scored: "per-app across tenants"
+    formula: "130,000 req / 10 s × 60 s = 780,000 ops/min (per-tenant cap halved 2025-09-30)"
+    justification: "[130,000 req / 10s per app across tenants](https://learn.microsoft.com/en-us/graph/throttling-limits) globally — generous in aggregate; [per-app/per-user-per-tenant cap was halved 2025-09-30](https://learn.microsoft.com/en-us/graph/throttling). [$batch](https://learn.microsoft.com/en-us/graph/json-batching) allows 20 sub-requests."
+    evidence: https://learn.microsoft.com/en-us/graph/throttling-limits
+
+  real_time:
+    band: 2
+    event_count: 0
+    justification: "Graph [change notifications](https://learn.microsoft.com/en-us/graph/change-notifications-overview) support webhooks + Event Hubs + Event Grid — but **Planner resources are not in the supported-resources list**. Only [delta queries](https://learn.microsoft.com/en-us/graph/delta-query-overview) apply — band 2."
+    evidence: https://learn.microsoft.com/en-us/graph/change-notifications-overview
+
+  auth_simplicity:
+    sub_criteria:
+      - id: pat
+        met: false
+        note: "No PAT — delegated-only"
+      - id: oauth2
+        met: true
+        evidence: https://learn.microsoft.com/en-us/graph/permissions-reference
+        note: "Entra ID OAuth 2.0"
+      - id: pat_self_serve
+        met: false
+        note: "No self-serve token (Azure app registration required)"
+      - id: oauth_self_serve
+        met: false
+        note: "App-only permissions unsupported for Planner"
+      - id: enterprise_auth
+        met: true
+        evidence: https://learn.microsoft.com/en-us/graph/permissions-reference
+        note: "Enterprise auth (Entra ID)"
+
+  data_portability:
+    band: 2
+    justification: "API coverage limited to basic plans — premium / Project plans inaccessible via Graph. Data locked in M365 ecosystem. No standalone export endpoint."
+    evidence: https://learn.microsoft.com/en-us/graph/api/resources/planner-overview?view=graph-rest-1.0
+
+  ai_agent_readiness:
+    sub_criteria:
+      - id: official_mcp
+        met: true
+        evidence: https://devblogs.microsoft.com/microsoft365dev/build-declarative-agents-for-microsoft-365-copilot-with-mcp/
+        note: "Microsoft 365 Copilot Studio [supports MCP](https://devblogs.microsoft.com/microsoft365dev/build-declarative-agents-for-microsoft-365-copilot-with-mcp/) (GA 2025)"
+      - id: public_ai_api
+        met: true
+        evidence: https://devblogs.microsoft.com/microsoft365dev/build-declarative-agents-for-microsoft-365-copilot-with-mcp/
+        note: "Copilot Studio programmable agents"
+      - id: agent_entity_lifecycle
+        met: false
+        note: "Project Manager agent has no public developer API"
+      - id: production_signals
+        met: true
+        evidence: https://devblogs.microsoft.com/microsoft365dev/build-declarative-agents-for-microsoft-365-copilot-with-mcp/
+        note: "M365 Copilot ecosystem partnerships"

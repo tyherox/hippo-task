@@ -1,0 +1,37 @@
+name: Scorecard
+
+# Guarantees the scorecard's source-of-truth (docs/scorecard/providers/*.yaml)
+# and its rendered artifacts (docs/scorecard.json + autogen sections of
+# docs/PROVIDER_SCORECARD.md + README.md) are in sync on every PR and on
+# every push to main. Fast (< 30s) — runs on all PRs, not path-filtered.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate scorecard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate scorecard
+        run: pnpm scorecard:validate

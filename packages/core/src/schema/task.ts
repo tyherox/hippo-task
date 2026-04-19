@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SchemaVersionSchema } from "../versioning/versions.js";
 import {
   HippoStatusSchema,
   HippoPrioritySchema,
@@ -102,8 +103,14 @@ export const HippoTaskSchema = z
     metadata: z.record(z.string(), z.unknown()).optional(),
 
     // ─── Schema ───────────────────────────────────────────────
-    /** Schema version this task conforms to. Semver string. */
-    schema_version: z.string().min(1, "schema_version is required"),
+    /**
+     * Schema version this task conforms to.
+     *
+     * Must be one of the versions in the registry
+     * ({@link ../versioning/registry.ts}). To accept older payloads
+     * and upgrade them to the current shape, use `migrateTask`.
+     */
+    schema_version: SchemaVersionSchema,
   })
   .refine(
     (task) => {
