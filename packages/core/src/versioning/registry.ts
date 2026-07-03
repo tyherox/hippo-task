@@ -93,8 +93,7 @@ function assertRegistryIntegrity(): void {
   }
 
   const seen = new Set<string>();
-  for (let i = 0; i < REGISTRY.length; i++) {
-    const entry = REGISTRY[i]!;
+  for (const [i, entry] of REGISTRY.entries()) {
     if (seen.has(entry.version)) {
       throw new Error(`Duplicate schema version in registry: ${entry.version}`);
     }

@@ -29,11 +29,7 @@ export type HippoPriority = z.infer<typeof HippoPrioritySchema>;
 
 // ─── Description Format ─────────────────────────────────────────
 
-export const DESCRIPTION_FORMATS = [
-  "markdown",
-  "plaintext",
-  "html",
-] as const;
+export const DESCRIPTION_FORMATS = ["markdown", "plaintext", "html"] as const;
 
 export const DescriptionFormatSchema = z.enum(DESCRIPTION_FORMATS);
 export type DescriptionFormat = z.infer<typeof DescriptionFormatSchema>;

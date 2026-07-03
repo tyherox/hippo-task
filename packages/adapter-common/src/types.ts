@@ -1,11 +1,10 @@
 import type {
-  HippoTask,
-  HippoStatus,
-  HippoPriority,
   DescriptionFormat,
   EstimateUnit,
-  HippoPerson,
   HippoCustomField,
+  HippoPerson,
+  HippoPriority,
+  HippoStatus,
 } from "@hippotask/core";
 
 /**

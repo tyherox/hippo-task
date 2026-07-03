@@ -1,6 +1,11 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  AdapterError,
+  AuthError,
+  NotFoundError,
+  RateLimitError,
+} from "../../src/errors.js";
 import { withRetry } from "../../src/retry.js";
-import { AuthError, AdapterError, RateLimitError, NotFoundError } from "../../src/errors.js";
 
 describe("withRetry", () => {
   it("returns result on first success", async () => {
@@ -36,9 +41,7 @@ describe("withRetry", () => {
   });
 
   it("does NOT retry AuthError", async () => {
-    const fn = vi
-      .fn()
-      .mockRejectedValue(new AuthError("jira", "Bad token"));
+    const fn = vi.fn().mockRejectedValue(new AuthError("jira", "Bad token"));
 
     await expect(
       withRetry(fn, { maxRetries: 3, initialDelayMs: 10 }),

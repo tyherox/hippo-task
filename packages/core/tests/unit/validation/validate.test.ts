@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { validateTask, validateProject } from "../../../src/validation/validate.js";
+import { describe, expect, it } from "vitest";
+import {
+  validateProject,
+  validateTask,
+} from "../../../src/validation/validate.js";
 
 describe("validateTask", () => {
   const VALID_TASK = {

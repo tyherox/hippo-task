@@ -1,11 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { HippoError } from "@hippotask/core";
+import { describe, expect, it } from "vitest";
 import {
   AdapterError,
-  RateLimitError,
-  NotFoundError,
   AuthError,
+  NotFoundError,
+  RateLimitError,
 } from "../../src/errors.js";
-import { HippoError } from "@hippotask/core";
 
 describe("AdapterError", () => {
   it("extends HippoError", () => {

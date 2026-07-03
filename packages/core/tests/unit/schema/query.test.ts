@@ -1,6 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { TaskQuerySchema, PaginatedResultSchema } from "../../../src/schema/query.js";
-import { HippoTaskSchema } from "../../../src/schema/task.js";
+import { describe, expect, it } from "vitest";
+import {
+  PaginatedResultSchema,
+  TaskQuerySchema,
+} from "../../../src/schema/query.js";
 
 describe("TaskQuerySchema", () => {
   it("accepts an empty query (all defaults)", () => {

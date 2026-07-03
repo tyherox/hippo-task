@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { HippoPersonSchema } from "../../../src/schema/person.js";
 
 describe("HippoPersonSchema", () => {
@@ -12,9 +12,26 @@ describe("HippoPersonSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts a minimal person (empty object)", () => {
+  it("rejects an empty person (no identifiers)", () => {
     const result = HippoPersonSchema.safeParse({});
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a person with only whitespace/empty identifiers", () => {
+    const result = HippoPersonSchema.safeParse({ name: "  ", email: "" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a person with only external_ids", () => {
+    const result = HippoPersonSchema.safeParse({
+      external_ids: { github: "octocat" },
+    });
     expect(result.success).toBe(true);
+  });
+
+  it("rejects a person with only an empty external_ids map", () => {
+    const result = HippoPersonSchema.safeParse({ external_ids: {} });
+    expect(result.success).toBe(false);
   });
 
   it("accepts a person with only name", () => {

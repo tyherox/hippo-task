@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { HippoProjectSchema } from "../../../src/schema/project.js";
 
 const VALID_PROJECT = {
@@ -34,7 +34,10 @@ describe("HippoProjectSchema", () => {
   });
 
   it("rejects invalid project status", () => {
-    const result = HippoProjectSchema.safeParse({ ...VALID_PROJECT, status: "deleted" });
+    const result = HippoProjectSchema.safeParse({
+      ...VALID_PROJECT,
+      status: "deleted",
+    });
     expect(result.success).toBe(false);
   });
 
@@ -58,6 +61,22 @@ describe("HippoProjectSchema", () => {
   it("rejects missing schema_version", () => {
     const { schema_version, ...project } = VALID_PROJECT;
     const result = HippoProjectSchema.safeParse(project);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-ISO created_at", () => {
+    const result = HippoProjectSchema.safeParse({
+      ...VALID_PROJECT,
+      created_at: "yesterday",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects date-only updated_at (datetime required)", () => {
+    const result = HippoProjectSchema.safeParse({
+      ...VALID_PROJECT,
+      updated_at: "2026-03-08",
+    });
     expect(result.success).toBe(false);
   });
 

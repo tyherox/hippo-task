@@ -1,13 +1,18 @@
 import { z } from "zod";
+import { isDateOnOrBefore } from "../utils/dates.js";
 import { SchemaVersionSchema } from "../versioning/versions.js";
+import { HippoCustomFieldSchema } from "./custom-field.js";
 import {
-  HippoStatusSchema,
-  HippoPrioritySchema,
+  IsoDateOrDateTimeStringSchema,
+  IsoDateTimeStringSchema,
+} from "./date-strings.js";
+import {
   DescriptionFormatSchema,
   EstimateUnitSchema,
+  HippoPrioritySchema,
+  HippoStatusSchema,
 } from "./enums.js";
 import { HippoPersonSchema } from "./person.js";
-import { HippoCustomFieldSchema } from "./custom-field.js";
 
 /**
  * HippoTask — the central type representing a single unit of work.
@@ -26,7 +31,10 @@ export const HippoTaskSchema = z
      * Keys are platform names, values are non-empty platform-specific IDs.
      */
     external_ids: z
-      .record(z.string(), z.string().min(1, "External ID value must be non-empty"))
+      .record(
+        z.string(),
+        z.string().min(1, "External ID value must be non-empty"),
+      )
       .optional(),
 
     // ─── Content ──────────────────────────────────────────────
@@ -64,19 +72,19 @@ export const HippoTaskSchema = z
 
     // ─── Time ─────────────────────────────────────────────────
     /** When the task was created. ISO 8601 datetime string. */
-    created_at: z.string().min(1, "created_at is required"),
+    created_at: IsoDateTimeStringSchema,
 
     /** When the task was last updated. ISO 8601 datetime string. */
-    updated_at: z.string().min(1, "updated_at is required"),
+    updated_at: IsoDateTimeStringSchema,
 
     /** When the task is due. ISO 8601 date or datetime string. */
-    due_date: z.string().optional(),
+    due_date: IsoDateOrDateTimeStringSchema.optional(),
 
     /** When work on the task should start. ISO 8601 date or datetime string. */
-    start_date: z.string().optional(),
+    start_date: IsoDateOrDateTimeStringSchema.optional(),
 
     /** When the task was completed/resolved. ISO 8601 datetime string. */
-    completed_at: z.string().optional(),
+    completed_at: IsoDateTimeStringSchema.optional(),
 
     // ─── Organization ─────────────────────────────────────────
     /** The project/container this task belongs to. References HippoProject.id. */
@@ -115,7 +123,9 @@ export const HippoTaskSchema = z
   .refine(
     (task) => {
       if (task.start_date != null && task.due_date != null) {
-        return task.start_date <= task.due_date;
+        // Instant-based comparison — handles mixed date/datetime formats
+        // and timezone offsets. Date-only values span their whole UTC day.
+        return isDateOnOrBefore(task.start_date, task.due_date);
       }
       return true;
     },

@@ -26,11 +26,11 @@ export function generateId(): string {
     .join("");
 
   const uuid = [
-    timeHex.slice(0, 8),                                    // 8 chars
-    timeHex.slice(8, 12),                                    // 4 chars
-    `7${randomHex.slice(0, 3)}`,                             // 4 chars (version 7)
-    `${((parseInt(randomHex.slice(3, 5), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0")}${randomHex.slice(5, 7)}`, // 4 chars (variant 10xx)
-    randomHex.slice(7, 19),                                  // 12 chars
+    timeHex.slice(0, 8), // 8 chars
+    timeHex.slice(8, 12), // 4 chars
+    `7${randomHex.slice(0, 3)}`, // 4 chars (version 7)
+    `${((Number.parseInt(randomHex.slice(3, 5), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0")}${randomHex.slice(5, 7)}`, // 4 chars (variant 10xx)
+    randomHex.slice(7, 19), // 12 chars
   ].join("-");
 
   return uuid;

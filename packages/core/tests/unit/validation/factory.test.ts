@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
-import { createTask, createProject } from "../../../src/validation/factory.js";
-import { HippoTaskSchema } from "../../../src/schema/task.js";
+import { describe, expect, it } from "vitest";
 import { HippoProjectSchema } from "../../../src/schema/project.js";
+import { HippoTaskSchema } from "../../../src/schema/task.js";
+import { createProject, createTask } from "../../../src/validation/factory.js";
 
 describe("createTask", () => {
   it("creates a valid task with just a title", () => {
@@ -66,9 +66,9 @@ describe("createTask", () => {
     expect(task.due_date).toBe("2026-03-15");
     expect(task.assignees).toHaveLength(1);
     expect(task.estimate).toBe(5);
-    expect(task.custom_fields?.["sprint"]?.label).toBe("Sprint");
+    expect(task.custom_fields?.sprint?.label).toBe("Sprint");
     expect(task.metadata?.["jira.key"]).toBe("PROJ-1");
-    expect(task.external_ids?.["jira"]).toBe("PROJ-1");
+    expect(task.external_ids?.jira).toBe("PROJ-1");
   });
 
   it("sets created_at and updated_at to the same value", () => {

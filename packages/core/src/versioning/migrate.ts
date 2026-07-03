@@ -69,8 +69,7 @@ export function applyMigrationChain(
   }
 
   let current: unknown = input;
-  for (let i = startIdx + 1; i < registry.length; i++) {
-    const entry = registry[i]!;
+  for (const entry of registry.slice(startIdx + 1)) {
     if (!entry.migrateFromPrevious) {
       throw new Error(
         `Registry entry ${entry.version} is missing migrateFromPrevious. This is a bug — the registry should have been validated on load.`,

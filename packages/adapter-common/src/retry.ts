@@ -1,4 +1,4 @@
-import { RateLimitError, AdapterError, AuthError } from "./errors.js";
+import { AdapterError, AuthError, RateLimitError } from "./errors.js";
 
 /**
  * Options for the retry utility.
@@ -23,6 +23,36 @@ const DEFAULT_OPTIONS: Required<RetryOptions> = {
   backoffMultiplier: 2,
   maxDelayMs: 30000,
 };
+
+/**
+ * Errors that must surface immediately, without retry:
+ * - AuthError (401/403)
+ * - AdapterError with 4xx status codes (except 429 rate limit)
+ */
+function isNonRetryable(error: unknown): boolean {
+  if (error instanceof AuthError) {
+    return true;
+  }
+  return (
+    error instanceof AdapterError &&
+    !(error instanceof RateLimitError) &&
+    error.statusCode != null &&
+    error.statusCode >= 400 &&
+    error.statusCode < 500
+  );
+}
+
+/** Wait time before the next attempt, honoring RateLimitError.retryAfter. */
+function nextWaitMs(error: unknown, fallbackMs: number): number {
+  if (error instanceof RateLimitError && error.retryAfter != null) {
+    return error.retryAfter * 1000;
+  }
+  return fallbackMs;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Execute a function with exponential backoff retry.
@@ -50,19 +80,7 @@ export async function withRetry<T>(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
 
-      // Never retry auth errors
-      if (error instanceof AuthError) {
-        throw error;
-      }
-
-      // Never retry 4xx errors (except 429 rate limit)
-      if (
-        error instanceof AdapterError &&
-        error.statusCode != null &&
-        error.statusCode >= 400 &&
-        error.statusCode < 500 &&
-        !(error instanceof RateLimitError)
-      ) {
+      if (isNonRetryable(error)) {
         throw error;
       }
 
@@ -71,13 +89,7 @@ export async function withRetry<T>(
         throw lastError;
       }
 
-      // Determine wait time
-      let waitMs = delay;
-      if (error instanceof RateLimitError && error.retryAfter != null) {
-        waitMs = error.retryAfter * 1000;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      await sleep(nextWaitMs(error, delay));
       delay = Math.min(delay * opts.backoffMultiplier, opts.maxDelayMs);
     }
   }

@@ -1,8 +1,8 @@
 import type { SafeParseReturnType } from "zod";
-import { HippoTaskSchema } from "../schema/task.js";
 import { HippoProjectSchema } from "../schema/project.js";
-import type { HippoTask } from "../schema/task.js";
 import type { HippoProject } from "../schema/project.js";
+import { HippoTaskSchema } from "../schema/task.js";
+import type { HippoTask } from "../schema/task.js";
 
 /**
  * Validate unknown data against the HippoTask schema.
@@ -21,13 +21,17 @@ import type { HippoProject } from "../schema/project.js";
  * }
  * ```
  */
-export function validateTask(data: unknown): SafeParseReturnType<unknown, HippoTask> {
+export function validateTask(
+  data: unknown,
+): SafeParseReturnType<unknown, HippoTask> {
   return HippoTaskSchema.safeParse(data);
 }
 
 /**
  * Validate unknown data against the HippoProject schema.
  */
-export function validateProject(data: unknown): SafeParseReturnType<unknown, HippoProject> {
+export function validateProject(
+  data: unknown,
+): SafeParseReturnType<unknown, HippoProject> {
   return HippoProjectSchema.safeParse(data);
 }

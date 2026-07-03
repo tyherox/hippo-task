@@ -53,6 +53,7 @@ describe("fixtures/invalid", () => {
     "empty-title.json": /title/i,
     "whitespace-title.json": /title/i,
     "bad-status.json": /status/i,
+    "bad-created-at.json": /created_at/i,
     "dates-out-of-order.json": /start_date/i,
     "missing-required.json": /schema_version/i,
   };

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HippoStatusSchema, HippoPrioritySchema } from "./enums.js";
+import { HippoPrioritySchema, HippoStatusSchema } from "./enums.js";
 
 /**
  * TaskQuery — filter/sort parameters for listing tasks.
@@ -9,9 +9,7 @@ export const TaskQuerySchema = z.object({
   project_id: z.string().optional(),
 
   /** Filter by status — single value or array. */
-  status: z
-    .union([HippoStatusSchema, z.array(HippoStatusSchema)])
-    .optional(),
+  status: z.union([HippoStatusSchema, z.array(HippoStatusSchema)]).optional(),
 
   /** Filter by assignee (email or HippoTask ID). */
   assignee: z.string().optional(),

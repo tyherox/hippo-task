@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { HippoTaskSchema } from "../../../src/schema/task.js";
 
 const VALID_MINIMAL_TASK = {
@@ -19,7 +19,11 @@ const VALID_FULL_TASK = {
   priority: "high",
   priority_raw: "2",
   assignees: [
-    { name: "Alice", email: "alice@example.com", external_ids: { jira: "u123" } },
+    {
+      name: "Alice",
+      email: "alice@example.com",
+      external_ids: { jira: "u123" },
+    },
   ],
   creator: { name: "Bob", email: "bob@example.com" },
   due_date: "2026-03-15",
@@ -52,15 +56,28 @@ describe("HippoTaskSchema", () => {
     });
 
     it("accepts all valid statuses", () => {
-      for (const status of ["backlog", "todo", "in_progress", "in_review", "done", "cancelled"]) {
-        const result = HippoTaskSchema.safeParse({ ...VALID_MINIMAL_TASK, status });
+      for (const status of [
+        "backlog",
+        "todo",
+        "in_progress",
+        "in_review",
+        "done",
+        "cancelled",
+      ]) {
+        const result = HippoTaskSchema.safeParse({
+          ...VALID_MINIMAL_TASK,
+          status,
+        });
         expect(result.success).toBe(true);
       }
     });
 
     it("accepts all valid priorities", () => {
       for (const priority of ["none", "low", "medium", "high", "urgent"]) {
-        const result = HippoTaskSchema.safeParse({ ...VALID_MINIMAL_TASK, priority });
+        const result = HippoTaskSchema.safeParse({
+          ...VALID_MINIMAL_TASK,
+          priority,
+        });
         expect(result.success).toBe(true);
       }
     });
@@ -96,7 +113,10 @@ describe("HippoTaskSchema", () => {
     });
 
     it("accepts empty labels array", () => {
-      const result = HippoTaskSchema.safeParse({ ...VALID_MINIMAL_TASK, labels: [] });
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        labels: [],
+      });
       expect(result.success).toBe(true);
     });
 
@@ -131,12 +151,18 @@ describe("HippoTaskSchema", () => {
     });
 
     it("rejects empty title", () => {
-      const result = HippoTaskSchema.safeParse({ ...VALID_MINIMAL_TASK, title: "" });
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        title: "",
+      });
       expect(result.success).toBe(false);
     });
 
     it("rejects whitespace-only title", () => {
-      const result = HippoTaskSchema.safeParse({ ...VALID_MINIMAL_TASK, title: "   " });
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        title: "   ",
+      });
       expect(result.success).toBe(false);
     });
 
@@ -147,7 +173,10 @@ describe("HippoTaskSchema", () => {
     });
 
     it("rejects invalid status", () => {
-      const result = HippoTaskSchema.safeParse({ ...VALID_MINIMAL_TASK, status: "banana" });
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        status: "banana",
+      });
       expect(result.success).toBe(false);
     });
 
@@ -167,6 +196,71 @@ describe("HippoTaskSchema", () => {
       const { schema_version, ...task } = VALID_MINIMAL_TASK;
       const result = HippoTaskSchema.safeParse(task);
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe("date format validation", () => {
+    it("rejects non-ISO created_at", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        created_at: "yesterday",
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects date-only created_at (datetime required)", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        created_at: "2026-03-08",
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("accepts created_at with a timezone offset", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        created_at: "2026-03-08T10:00:00+05:30",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects non-ISO updated_at", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        updated_at: "last tuesday",
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects non-ISO due_date", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        due_date: "next friday",
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects an impossible calendar date", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        due_date: "2026-02-30",
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("accepts datetime completed_at and rejects garbage", () => {
+      expect(
+        HippoTaskSchema.safeParse({
+          ...VALID_MINIMAL_TASK,
+          completed_at: "2026-03-09T08:00:00Z",
+        }).success,
+      ).toBe(true);
+      expect(
+        HippoTaskSchema.safeParse({
+          ...VALID_MINIMAL_TASK,
+          completed_at: "done",
+        }).success,
+      ).toBe(false);
     });
   });
 
@@ -196,6 +290,26 @@ describe("HippoTaskSchema", () => {
         due_date: "2026-03-15",
       });
       expect(result.success).toBe(true);
+    });
+
+    it("accepts a datetime start_date with a date-only due_date on the same day", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        start_date: "2026-03-10T09:00:00Z",
+        due_date: "2026-03-10",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("compares start/due as instants across timezone offsets", () => {
+      // 2026-03-08T23:00:00-05:00 is 2026-03-09T04:00:00Z — later than the
+      // due datetime despite sorting earlier lexicographically.
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        start_date: "2026-03-08T23:00:00-05:00",
+        due_date: "2026-03-09T01:00:00Z",
+      });
+      expect(result.success).toBe(false);
     });
 
     it("rejects negative estimate", () => {
@@ -254,7 +368,14 @@ describe("HippoTaskSchema", () => {
         const _updated: string = task.updated_at;
         const _version: string = task.schema_version;
         // Prevent unused warnings
-        expect([_id, _title, _status, _created, _updated, _version]).toBeTruthy();
+        expect([
+          _id,
+          _title,
+          _status,
+          _created,
+          _updated,
+          _version,
+        ]).toBeTruthy();
       }
     });
   });

@@ -69,7 +69,12 @@ export type {
 
 // ─── Utilities ──────────────────────────────────────────────────
 export { generateId } from "./utils/id.js";
-export { nowISO, isValidISO8601, isDateOnOrBefore } from "./utils/dates.js";
+export {
+  nowISO,
+  isValidISO8601,
+  isValidISO8601DateTime,
+  isDateOnOrBefore,
+} from "./utils/dates.js";
 export { deepMerge } from "./utils/merge.js";
 
 // ─── Errors ─────────────────────────────────────────────────────

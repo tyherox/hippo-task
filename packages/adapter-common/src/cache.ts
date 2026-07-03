@@ -11,7 +11,7 @@ export class TtlCache<T> {
   /**
    * @param defaultTtlMs Default time-to-live in milliseconds. Default: 60000 (1 minute).
    */
-  constructor(defaultTtlMs: number = 60_000) {
+  constructor(defaultTtlMs = 60_000) {
     this.defaultTtlMs = defaultTtlMs;
   }
 

@@ -26,6 +26,15 @@ Initial schema. Defines `HippoTask` (id, title, status, created_at, updated_at, 
 
 No migrator — this is the chain's origin.
 
+**2026-06 package-level enforcement tightening (no wire-format change, no registry entry):**
+
+- Date fields now reject non-ISO-8601 strings. Timestamps (`created_at`, `updated_at`, `completed_at`) require a datetime component; `due_date`/`start_date` accept date or datetime.
+- `start_date ≤ due_date` compares instants instead of lexicographic strings, so mixed date/datetime formats and timezone offsets compare correctly. Date-only values span their whole UTC day.
+- `HippoCustomField.value` must match the declared `type` (discriminated union).
+- `HippoPerson` requires at least one identifier (`id`, `name`, `email`, or non-empty `external_ids`).
+
+Rationale: these rules were already documented as the 1.0.0 contract in `docs/SCHEMA.md` §10 (and the person rule is now documented there) — the code just didn't enforce them. Per the patch rules above ("stricter runtime refinements"), this ships as a package patch: payloads that now fail were never spec-valid.
+
 ---
 
 ## How to add a new version

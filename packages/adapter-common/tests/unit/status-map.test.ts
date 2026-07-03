@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { mapStatus, mapStatusReverse } from "../../src/status-map.js";
 import type { StatusMap } from "../../src/status-map.js";
 
@@ -6,8 +6,8 @@ const TEST_MAP: StatusMap = {
   toHippo: {
     "To Do": "todo",
     "In Progress": "in_progress",
-    "Done": "done",
-    "Backlog": "backlog",
+    Done: "done",
+    Backlog: "backlog",
   },
   fromHippo: {
     backlog: "Backlog",

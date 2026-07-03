@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SchemaVersionSchema } from "../versioning/versions.js";
+import { IsoDateTimeStringSchema } from "./date-strings.js";
 import { ProjectStatusSchema } from "./enums.js";
 
 /**
@@ -15,7 +16,10 @@ export const HippoProjectSchema = z.object({
 
   /** External platform IDs. */
   external_ids: z
-    .record(z.string(), z.string().min(1, "External ID value must be non-empty"))
+    .record(
+      z.string(),
+      z.string().min(1, "External ID value must be non-empty"),
+    )
     .optional(),
 
   /** Project name. Must be non-empty. */
@@ -28,10 +32,10 @@ export const HippoProjectSchema = z.object({
   status: ProjectStatusSchema.optional(),
 
   /** ISO 8601 datetime. */
-  created_at: z.string().min(1, "created_at is required"),
+  created_at: IsoDateTimeStringSchema,
 
   /** ISO 8601 datetime. */
-  updated_at: z.string().min(1, "updated_at is required"),
+  updated_at: IsoDateTimeStringSchema,
 
   /** Untyped metadata overflow. */
   metadata: z.record(z.string(), z.unknown()).optional(),

@@ -22,10 +22,7 @@ export function deepMerge<T extends Record<string, unknown>>(
     }
 
     // If both are plain objects (not arrays, not null), recurse
-    if (
-      isPlainObject(sourceVal) &&
-      isPlainObject(result[key])
-    ) {
+    if (isPlainObject(sourceVal) && isPlainObject(result[key])) {
       result[key] = deepMerge(
         result[key] as Record<string, unknown>,
         sourceVal as Record<string, unknown>,

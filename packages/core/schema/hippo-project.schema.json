@@ -36,12 +36,10 @@
           ]
         },
         "created_at": {
-          "type": "string",
-          "minLength": 1
+          "type": "string"
         },
         "updated_at": {
-          "type": "string",
-          "minLength": 1
+          "type": "string"
         },
         "metadata": {
           "type": "object",

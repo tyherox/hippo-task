@@ -1,15 +1,38 @@
-import type { HippoTask } from "../schema/task.js";
-import type { HippoProject } from "../schema/project.js";
-import type { HippoStatus } from "../schema/enums.js";
-import type { HippoPriority, DescriptionFormat, EstimateUnit } from "../schema/enums.js";
-import type { HippoPerson } from "../schema/person.js";
 import type { HippoCustomField } from "../schema/custom-field.js";
-import { generateId } from "../utils/id.js";
+import type { HippoStatus } from "../schema/enums.js";
+import type {
+  DescriptionFormat,
+  EstimateUnit,
+  HippoPriority,
+} from "../schema/enums.js";
+import type { HippoPerson } from "../schema/person.js";
+import type { HippoProject } from "../schema/project.js";
+import type { HippoTask } from "../schema/task.js";
 import { nowISO } from "../utils/dates.js";
+import { generateId } from "../utils/id.js";
 import { CURRENT_SCHEMA_VERSION } from "../versioning/versions.js";
 
 /** Default status for new tasks. */
 const DEFAULT_STATUS: HippoStatus = "todo";
+
+/**
+ * Copy of `fields` with every `undefined` entry removed.
+ *
+ * Preserves the factory invariant: optional fields are absent from the
+ * output, never present with an `undefined` value (see AGENTS.md
+ * "Optional fields pattern").
+ */
+function definedFields<T extends Record<string, unknown>>(
+  fields: T,
+): Partial<T> {
+  const out: Partial<T> = {};
+  for (const key of Object.keys(fields) as Array<keyof T>) {
+    if (fields[key] !== undefined) {
+      out[key] = fields[key];
+    }
+  }
+  return out;
+}
 
 /**
  * Input for creating a new HippoTask.
@@ -63,24 +86,26 @@ export function createTask(input: CreateTaskInput): HippoTask {
     created_at: now,
     updated_at: now,
     schema_version: CURRENT_SCHEMA_VERSION,
-    // Optional fields — only included if provided
-    ...(input.external_ids !== undefined && { external_ids: input.external_ids }),
-    ...(input.description !== undefined && { description: input.description }),
-    ...(input.description_format !== undefined && { description_format: input.description_format }),
-    ...(input.status_raw !== undefined && { status_raw: input.status_raw }),
-    ...(input.priority !== undefined && { priority: input.priority }),
-    ...(input.priority_raw !== undefined && { priority_raw: input.priority_raw }),
-    ...(input.assignees !== undefined && { assignees: input.assignees }),
-    ...(input.creator !== undefined && { creator: input.creator }),
-    ...(input.due_date !== undefined && { due_date: input.due_date }),
-    ...(input.start_date !== undefined && { start_date: input.start_date }),
-    ...(input.project_id !== undefined && { project_id: input.project_id }),
-    ...(input.parent_id !== undefined && { parent_id: input.parent_id }),
-    ...(input.labels !== undefined && { labels: input.labels }),
-    ...(input.estimate !== undefined && { estimate: input.estimate }),
-    ...(input.estimate_unit !== undefined && { estimate_unit: input.estimate_unit }),
-    ...(input.custom_fields !== undefined && { custom_fields: input.custom_fields }),
-    ...(input.metadata !== undefined && { metadata: input.metadata }),
+    // Optional fields — omitted entirely when not provided
+    ...definedFields({
+      external_ids: input.external_ids,
+      description: input.description,
+      description_format: input.description_format,
+      status_raw: input.status_raw,
+      priority: input.priority,
+      priority_raw: input.priority_raw,
+      assignees: input.assignees,
+      creator: input.creator,
+      due_date: input.due_date,
+      start_date: input.start_date,
+      project_id: input.project_id,
+      parent_id: input.parent_id,
+      labels: input.labels,
+      estimate: input.estimate,
+      estimate_unit: input.estimate_unit,
+      custom_fields: input.custom_fields,
+      metadata: input.metadata,
+    }),
   };
 }
 
@@ -109,9 +134,12 @@ export function createProject(input: CreateProjectInput): HippoProject {
     created_at: now,
     updated_at: now,
     schema_version: CURRENT_SCHEMA_VERSION,
-    ...(input.description !== undefined && { description: input.description }),
-    ...(input.status !== undefined && { status: input.status }),
-    ...(input.external_ids !== undefined && { external_ids: input.external_ids }),
-    ...(input.metadata !== undefined && { metadata: input.metadata }),
+    // Optional fields — omitted entirely when not provided
+    ...definedFields({
+      description: input.description,
+      status: input.status,
+      external_ids: input.external_ids,
+      metadata: input.metadata,
+    }),
   };
 }

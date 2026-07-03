@@ -232,7 +232,7 @@ type EstimateUnit =
 
 ### HippoPerson
 
-Represents a user/person reference. Intentionally lightweight — HippoTask is not a user directory.
+Represents a user/person reference. Intentionally lightweight — HippoTask is not a user directory. Every field is optional, but **at least one identifier must be present** (see Section 10) — an empty person is meaningless for assignee matching or cross-platform identity resolution.
 
 ```typescript
 interface HippoPerson {
@@ -589,14 +589,18 @@ Beyond type checking, the schema enforces these runtime validations:
 | Non-empty title | `title` | Title must be a non-empty string after trimming |
 | Valid status | `status` | Must be one of the `HippoStatus` enum values |
 | Valid priority | `priority` | If present, must be one of the `HippoPriority` enum values |
-| ISO 8601 dates | `created_at`, `updated_at`, `due_date`, `start_date`, `completed_at` | Must be valid ISO 8601 strings |
-| Chronological dates | `start_date`, `due_date` | If both present, `start_date` ≤ `due_date` |
+| ISO 8601 datetimes | `created_at`, `updated_at`, `completed_at` | Must be valid ISO 8601 **datetime** strings (date-only is rejected) |
+| ISO 8601 dates | `due_date`, `start_date` | Must be valid ISO 8601 date **or** datetime strings |
+| Chronological dates | `start_date`, `due_date` | If both present, `start_date` ≤ `due_date`. Compared as instants (mixed formats and timezone offsets are handled); a date-only value spans its whole UTC day |
 | Positive estimate | `estimate` | If present, must be > 0 |
-| Valid schema version | `schema_version` | Must be a valid semver string |
+| Valid schema version | `schema_version` | Must be a version registered in the version registry |
 | Unique external IDs | `external_ids` | Values must be non-empty strings |
-| Custom field type match | `custom_fields[*].value` | Value must match declared `type` |
+| Custom field type match | `custom_fields[*].value` | Value must match declared `type` (enforced via a discriminated union) |
+| Person identity | `assignees[*]`, `creator`, person custom fields | At least one of `id`, `name`, `email` (non-whitespace), or a non-empty `external_ids` map must be present |
 
-These validations will be implemented as Zod schemas in `@hippotask/core`, providing both compile-time TypeScript types and runtime validation.
+These validations are implemented as Zod schemas in `@hippotask/core`, providing both compile-time TypeScript types and runtime validation.
+
+**Note on JSON Schema export:** refinement rules (date formats, chronology, person identity) are enforced by the Zod schemas only. The exported JSON Schema captures structural rules (types, required fields, enums, the custom-field discriminated union) but not refinements — non-TypeScript consumers get structural validation and should treat the rules above as normative documentation.
 
 ---
 

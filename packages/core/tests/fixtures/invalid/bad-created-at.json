@@ -1,0 +1,8 @@
+{
+  "id": "019470e1-3a4c-7f1c-8a5e-2b3c4d5e6f7a",
+  "title": "Task with malformed created_at",
+  "status": "todo",
+  "created_at": "yesterday",
+  "updated_at": "2026-04-19T10:00:00Z",
+  "schema_version": "1.0.0"
+}

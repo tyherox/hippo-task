@@ -1,17 +1,24 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  HippoStatusSchema,
-  HippoPrioritySchema,
+  CustomFieldTypeSchema,
   DescriptionFormatSchema,
   EstimateUnitSchema,
-  ProjectStatusSchema,
-  CustomFieldTypeSchema,
-  HIPPO_STATUSES,
   HIPPO_PRIORITIES,
+  HIPPO_STATUSES,
+  HippoPrioritySchema,
+  HippoStatusSchema,
+  ProjectStatusSchema,
 } from "../../../src/schema/enums.js";
 
 describe("HippoStatusSchema", () => {
-  const validStatuses = ["backlog", "todo", "in_progress", "in_review", "done", "cancelled"];
+  const validStatuses = [
+    "backlog",
+    "todo",
+    "in_progress",
+    "in_review",
+    "done",
+    "cancelled",
+  ];
 
   it.each(validStatuses)("accepts valid status: %s", (status) => {
     expect(HippoStatusSchema.safeParse(status).success).toBe(true);
@@ -72,9 +79,12 @@ describe("EstimateUnitSchema", () => {
 });
 
 describe("ProjectStatusSchema", () => {
-  it.each(["active", "paused", "completed", "archived"])("accepts: %s", (status) => {
-    expect(ProjectStatusSchema.safeParse(status).success).toBe(true);
-  });
+  it.each(["active", "paused", "completed", "archived"])(
+    "accepts: %s",
+    (status) => {
+      expect(ProjectStatusSchema.safeParse(status).success).toBe(true);
+    },
+  );
 
   it("rejects invalid status", () => {
     expect(ProjectStatusSchema.safeParse("deleted").success).toBe(false);
@@ -83,8 +93,15 @@ describe("ProjectStatusSchema", () => {
 
 describe("CustomFieldTypeSchema", () => {
   const validTypes = [
-    "string", "number", "boolean", "date",
-    "select", "multi_select", "url", "email", "person",
+    "string",
+    "number",
+    "boolean",
+    "date",
+    "select",
+    "multi_select",
+    "url",
+    "email",
+    "person",
   ];
 
   it.each(validTypes)("accepts: %s", (type) => {

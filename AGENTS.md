@@ -85,7 +85,7 @@ The MCP server is not built yet, so `.hippotask/` does not exist until Milestone
 
 **Public API** — only `packages/{pkg}/src/index.ts` exports ship. Adding an export is a maintenance commitment ([docs/ENGINEERING.md §1.3](docs/ENGINEERING.md)).
 
-**Optional fields pattern** — the factory functions in [`packages/core/src/validation/factory.ts`](packages/core/src/validation/factory.ts) use conditional spreads to omit `undefined` rather than set it. Keep that pattern when adding optional fields.
+**Optional fields pattern** — the factory functions in [`packages/core/src/validation/factory.ts`](packages/core/src/validation/factory.ts) route optional fields through the `definedFields` helper, which omits `undefined` entries rather than setting them. Add new optional fields to that call — never assign `undefined` explicitly.
 
 **Commits** — short imperative titles. Follow what's in `git log`.
 
@@ -132,7 +132,7 @@ Follow the layout in [`docs/ARCHITECTURE.md §4`](docs/ARCHITECTURE.md). One fil
 ## Gotchas
 
 - **`.js` import extensions are required.** Node16 module resolution. New agents trip on this constantly.
-- **Zod v3.** `z.string().datetime()` exists but isn't always used — the schema uses `z.string().min(1)` with docstring hints for ISO 8601 to keep error messages readable. Match the existing pattern.
+- **Zod v3.** Date fields validate via `.refine(isValidISO8601…)` helpers in [`packages/core/src/schema/date-strings.ts`](packages/core/src/schema/date-strings.ts) with readable error messages — not `z.string().datetime()`. Timestamps (`created_at`, `updated_at`, `completed_at`) require a datetime; scheduling fields (`due_date`, `start_date`) accept date or datetime. Match that pattern for new date fields.
 - **`noNonNullAssertion` is a warning.** Avoid `!` anyway.
 - **Cognitive complexity ≤ 15 per function**, enforced by Biome. Functions ≤ 30 lines is a guideline.
 - **No module-level side effects.** `@hippotask/core` is `sideEffects: false`; don't introduce logging, registration, or global mutation at import time.
