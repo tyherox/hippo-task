@@ -17,6 +17,9 @@
           "additionalProperties": {
             "type": "string",
             "minLength": 1
+          },
+          "propertyNames": {
+            "minLength": 1
           }
         },
         "name": {
@@ -43,7 +46,10 @@
         },
         "metadata": {
           "type": "object",
-          "additionalProperties": {}
+          "additionalProperties": {},
+          "propertyNames": {
+            "minLength": 1
+          }
         },
         "schema_version": {
           "type": "string",

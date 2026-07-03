@@ -32,7 +32,7 @@ export const HippoTaskSchema = z
      */
     external_ids: z
       .record(
-        z.string(),
+        z.string().min(1, "External ID keys must be non-empty"),
         z.string().min(1, "External ID value must be non-empty"),
       )
       .optional(),
@@ -61,7 +61,12 @@ export const HippoTaskSchema = z
     priority: HippoPrioritySchema.optional(),
 
     /** Original platform priority string or number. */
-    priority_raw: z.union([z.string(), z.number()]).optional(),
+    priority_raw: z
+      .union([
+        z.string(),
+        z.number().finite("priority_raw must be a finite number"),
+      ])
+      .optional(),
 
     // ─── People ───────────────────────────────────────────────
     /** Users assigned to this task. */
@@ -88,27 +93,40 @@ export const HippoTaskSchema = z
 
     // ─── Organization ─────────────────────────────────────────
     /** The project/container this task belongs to. References HippoProject.id. */
-    project_id: z.string().optional(),
+    project_id: z.string().min(1, "project_id must be non-empty").optional(),
 
     /** Parent task ID, for subtask relationships. References another HippoTask.id. */
-    parent_id: z.string().optional(),
+    parent_id: z.string().min(1, "parent_id must be non-empty").optional(),
 
     /** Free-form labels/tags for categorization. */
-    labels: z.array(z.string()).optional(),
+    labels: z
+      .array(z.string().min(1, "Labels must be non-empty strings"))
+      .optional(),
 
     // ─── Estimation ───────────────────────────────────────────
-    /** Effort estimate as a positive numeric value. */
-    estimate: z.number().positive("Estimate must be greater than 0").optional(),
+    /** Effort estimate as a positive, finite numeric value. */
+    estimate: z
+      .number()
+      .positive("Estimate must be greater than 0")
+      .finite("Estimate must be a finite number")
+      .optional(),
 
     /** Unit for the estimate value. Defaults to "points" if omitted. */
     estimate_unit: EstimateUnitSchema.optional(),
 
     // ─── Extension ────────────────────────────────────────────
     /** Typed custom fields. Keys are field names/slugs. */
-    custom_fields: z.record(z.string(), HippoCustomFieldSchema).optional(),
+    custom_fields: z
+      .record(
+        z.string().min(1, "Custom field keys must be non-empty"),
+        HippoCustomFieldSchema,
+      )
+      .optional(),
 
     /** Untyped metadata overflow. Namespaced keys recommended. */
-    metadata: z.record(z.string(), z.unknown()).optional(),
+    metadata: z
+      .record(z.string().min(1, "Metadata keys must be non-empty"), z.unknown())
+      .optional(),
 
     // ─── Schema ───────────────────────────────────────────────
     /**
@@ -132,6 +150,20 @@ export const HippoTaskSchema = z
     {
       message: "start_date must be on or before due_date",
       path: ["start_date"],
+    },
+  )
+  .refine(
+    (task) => task.parent_id === undefined || task.parent_id !== task.id,
+    {
+      message: "parent_id must not reference the task itself",
+      path: ["parent_id"],
+    },
+  )
+  .refine(
+    (task) => task.estimate_unit === undefined || task.estimate !== undefined,
+    {
+      message: "estimate_unit requires estimate to be set",
+      path: ["estimate_unit"],
     },
   );
 

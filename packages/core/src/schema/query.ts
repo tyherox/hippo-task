@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { IsoDateOrDateTimeStringSchema } from "./date-strings.js";
 import { HippoPrioritySchema, HippoStatusSchema } from "./enums.js";
 
 /**
@@ -20,8 +21,8 @@ export const TaskQuerySchema = z.object({
   /** Filter by priority. */
   priority: HippoPrioritySchema.optional(),
 
-  /** Tasks updated after this timestamp. ISO 8601. */
-  updated_since: z.string().optional(),
+  /** Tasks updated after this timestamp. ISO 8601 date or datetime. */
+  updated_since: IsoDateOrDateTimeStringSchema.optional(),
 
   /** Free-text search in title and description. */
   search: z.string().optional(),

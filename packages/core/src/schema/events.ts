@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { IsoDateTimeStringSchema } from "./date-strings.js";
 import { HippoTaskSchema } from "./task.js";
 
 /**
@@ -17,8 +18,8 @@ export const TaskChangeEventSchema = z.object({
   /** The full task (for created/updated) or undefined (for deleted). */
   task: HippoTaskSchema.optional(),
 
-  /** ISO 8601 timestamp of when the change occurred. */
-  timestamp: z.string().min(1, "Timestamp is required"),
+  /** ISO 8601 datetime of when the change occurred. */
+  timestamp: IsoDateTimeStringSchema,
 });
 
 export type TaskChangeEvent = z.infer<typeof TaskChangeEventSchema>;

@@ -32,6 +32,10 @@ No migrator — this is the chain's origin.
 - `start_date ≤ due_date` compares instants instead of lexicographic strings, so mixed date/datetime formats and timezone offsets compare correctly. Date-only values span their whole UTC day.
 - `HippoCustomField.value` must match the declared `type` (discriminated union).
 - `HippoPerson` requires at least one identifier (`id`, `name`, `email`, or non-empty `external_ids`).
+- Numeric values must be JSON-representable: `estimate` and numeric `priority_raw` reject `Infinity`/`NaN`.
+- Garbage-reference rejection: empty-string `project_id`, `parent_id`, labels, record keys (`external_ids`, `custom_fields`, `metadata`), and person `external_ids` values all fail validation; a task cannot be its own parent; `estimate_unit` requires `estimate`.
+- `TaskChangeEvent.timestamp` requires an ISO 8601 datetime; `TaskQuery.updated_since` requires ISO 8601 date or datetime.
+- Project `name` rejects whitespace-only strings (matching task `title`).
 
 Rationale: these rules were already documented as the 1.0.0 contract in `docs/SCHEMA.md` §10 (and the person rule is now documented there) — the code just didn't enforce them. Per the patch rules above ("stricter runtime refinements"), this ships as a package patch: payloads that now fail were never spec-valid.
 

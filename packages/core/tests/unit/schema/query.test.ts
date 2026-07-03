@@ -39,6 +39,11 @@ describe("TaskQuerySchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("rejects non-ISO updated_since", () => {
+    const result = TaskQuerySchema.safeParse({ updated_since: "yesterday" });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects invalid status in array", () => {
     const result = TaskQuerySchema.safeParse({
       status: ["todo", "banana"],

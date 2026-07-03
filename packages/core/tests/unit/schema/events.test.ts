@@ -76,4 +76,14 @@ describe("TaskChangeEventSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("rejects non-ISO timestamp", () => {
+    const result = TaskChangeEventSchema.safeParse({
+      type: "created",
+      platform: "jira",
+      external_id: "PROJ-123",
+      timestamp: "just now",
+    });
+    expect(result.success).toBe(false);
+  });
 });

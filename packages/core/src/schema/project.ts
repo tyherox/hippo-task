@@ -17,13 +17,19 @@ export const HippoProjectSchema = z.object({
   /** External platform IDs. */
   external_ids: z
     .record(
-      z.string(),
+      z.string().min(1, "External ID keys must be non-empty"),
       z.string().min(1, "External ID value must be non-empty"),
     )
     .optional(),
 
-  /** Project name. Must be non-empty. */
-  name: z.string().min(1, "Project name must be non-empty"),
+  /** Project name. Must be non-empty after trimming. */
+  name: z
+    .string()
+    .min(1, "Project name must be non-empty")
+    .refine(
+      (s) => s.trim().length > 0,
+      "Project name must not be whitespace-only",
+    ),
 
   /** Project description. Markdown format. */
   description: z.string().optional(),
@@ -38,7 +44,9 @@ export const HippoProjectSchema = z.object({
   updated_at: IsoDateTimeStringSchema,
 
   /** Untyped metadata overflow. */
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  metadata: z
+    .record(z.string().min(1, "Metadata keys must be non-empty"), z.unknown())
+    .optional(),
 
   /**
    * Schema version this project conforms to.

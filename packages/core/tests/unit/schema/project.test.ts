@@ -52,6 +52,14 @@ describe("HippoProjectSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects whitespace-only name", () => {
+    const result = HippoProjectSchema.safeParse({
+      ...VALID_PROJECT,
+      name: "   ",
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects missing id", () => {
     const { id, ...project } = VALID_PROJECT;
     const result = HippoProjectSchema.safeParse(project);

@@ -28,7 +28,12 @@ export const HippoPersonSchema = z
      * External platform user IDs.
      * Keys are platform names, values are platform-specific IDs.
      */
-    external_ids: z.record(z.string(), z.string()).optional(),
+    external_ids: z
+      .record(
+        z.string().min(1, "External ID keys must be non-empty"),
+        z.string().min(1, "External ID value must be non-empty"),
+      )
+      .optional(),
   })
   .refine(
     (person) =>

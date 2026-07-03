@@ -335,6 +335,57 @@ describe("HippoTaskSchema", () => {
       });
       expect(result.success).toBe(true);
     });
+
+    it("rejects non-finite estimate", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        estimate: Number.POSITIVE_INFINITY,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects non-finite priority_raw", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        priority_raw: Number.POSITIVE_INFINITY,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects estimate_unit without estimate", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        estimate_unit: "hours",
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects a task that is its own parent", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        parent_id: VALID_MINIMAL_TASK.id,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects empty-string labels", () => {
+      const result = HippoTaskSchema.safeParse({
+        ...VALID_MINIMAL_TASK,
+        labels: ["auth", ""],
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects empty project_id and parent_id", () => {
+      expect(
+        HippoTaskSchema.safeParse({ ...VALID_MINIMAL_TASK, project_id: "" })
+          .success,
+      ).toBe(false);
+      expect(
+        HippoTaskSchema.safeParse({ ...VALID_MINIMAL_TASK, parent_id: "" })
+          .success,
+      ).toBe(false);
+    });
   });
 
   describe("external_ids", () => {
@@ -352,6 +403,21 @@ describe("HippoTaskSchema", () => {
         external_ids: { jira: "PROJ-123", linear: "ENG-456" },
       });
       expect(result.success).toBe(true);
+    });
+
+    it("rejects empty-string record keys", () => {
+      expect(
+        HippoTaskSchema.safeParse({
+          ...VALID_MINIMAL_TASK,
+          external_ids: { "": "PROJ-123" },
+        }).success,
+      ).toBe(false);
+      expect(
+        HippoTaskSchema.safeParse({
+          ...VALID_MINIMAL_TASK,
+          metadata: { "": "orphan value" },
+        }).success,
+      ).toBe(false);
     });
   });
 

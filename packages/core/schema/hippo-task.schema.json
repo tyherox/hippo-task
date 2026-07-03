@@ -17,6 +17,9 @@
           "additionalProperties": {
             "type": "string",
             "minLength": 1
+          },
+          "propertyNames": {
+            "minLength": 1
           }
         },
         "title": {
@@ -59,9 +62,13 @@
           ]
         },
         "priority_raw": {
-          "type": [
-            "string",
-            "number"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
           ]
         },
         "assignees": {
@@ -81,7 +88,11 @@
               "external_ids": {
                 "type": "object",
                 "additionalProperties": {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1
+                },
+                "propertyNames": {
+                  "minLength": 1
                 }
               }
             },
@@ -103,7 +114,11 @@
             "external_ids": {
               "type": "object",
               "additionalProperties": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1
+              },
+              "propertyNames": {
+                "minLength": 1
               }
             }
           },
@@ -125,15 +140,18 @@
           "type": "string"
         },
         "project_id": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         },
         "parent_id": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         },
         "labels": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         },
         "estimate": {
@@ -413,7 +431,11 @@
                       "external_ids": {
                         "type": "object",
                         "additionalProperties": {
-                          "type": "string"
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "propertyNames": {
+                          "minLength": 1
                         }
                       }
                     },
@@ -428,11 +450,17 @@
                 "additionalProperties": false
               }
             ]
+          },
+          "propertyNames": {
+            "minLength": 1
           }
         },
         "metadata": {
           "type": "object",
-          "additionalProperties": {}
+          "additionalProperties": {},
+          "propertyNames": {
+            "minLength": 1
+          }
         },
         "schema_version": {
           "type": "string",

@@ -592,9 +592,14 @@ Beyond type checking, the schema enforces these runtime validations:
 | ISO 8601 datetimes | `created_at`, `updated_at`, `completed_at` | Must be valid ISO 8601 **datetime** strings (date-only is rejected) |
 | ISO 8601 dates | `due_date`, `start_date` | Must be valid ISO 8601 date **or** datetime strings |
 | Chronological dates | `start_date`, `due_date` | If both present, `start_date` ≤ `due_date`. Compared as instants (mixed formats and timezone offsets are handled); a date-only value spans its whole UTC day |
-| Positive estimate | `estimate` | If present, must be > 0 |
+| Positive, finite estimate | `estimate` | If present, must be > 0 and finite (JSON-representable) |
+| Finite raw priority | `priority_raw` | If numeric, must be finite |
+| Estimate coherence | `estimate_unit` | Requires `estimate` to be present |
+| No self-parent | `parent_id` | Must not equal the task's own `id`, and must be non-empty |
+| Non-empty references | `project_id`, `labels[*]` | Empty strings rejected |
 | Valid schema version | `schema_version` | Must be a version registered in the version registry |
-| Unique external IDs | `external_ids` | Values must be non-empty strings |
+| Non-empty map entries | `external_ids`, `custom_fields`, `metadata` | Keys must be non-empty; `external_ids` values must be non-empty strings (on tasks, projects, and persons) |
+| Event timestamps | `TaskChangeEvent.timestamp`, `TaskQuery.updated_since` | Must be valid ISO 8601 (timestamp requires a datetime) |
 | Custom field type match | `custom_fields[*].value` | Value must match declared `type` (enforced via a discriminated union) |
 | Person identity | `assignees[*]`, `creator`, person custom fields | At least one of `id`, `name`, `email` (non-whitespace), or a non-empty `external_ids` map must be present |
 

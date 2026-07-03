@@ -60,4 +60,11 @@ describe("HippoPersonSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("rejects external_ids with empty string values", () => {
+    const result = HippoPersonSchema.safeParse({
+      external_ids: { jira: "" },
+    });
+    expect(result.success).toBe(false);
+  });
 });
