@@ -1,0 +1,42 @@
+[package]
+name = "hippo-task"
+version = "0.1.0"
+edition = "2021"
+# std `File::lock` (the ledger's advisory lock) is stable since 1.89.
+# Clippy's `incompatible_msrv` lint holds the code to this version.
+rust-version = "1.89"
+description = "HippoTask: shared task memory for humans and coding agents — an append-only event ledger folded into task state (the open agent-native task schema)."
+license = "MIT"
+publish = false # internal release — not on crates.io
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "hippo-task"
+path = "src/main.rs"
+doc = false # the lib carries the docs; avoids a lib/bin doc-name collision
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ulid = "1"
+chrono = "0.4"
+
+# Rules enforced by the compiler instead of by review (see AGENTS.md).
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+# No panics in product code: failures are values (`Result`) with an exit code.
+# (Tests may panic — that's how a test fails; see clippy.toml.)
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+# `println!` panics when stdout is a closed pipe (`tasks list | head -1`).
+# All output goes through a writer that treats a closed pipe as a clean exit.
+print_stdout = "deny"

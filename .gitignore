@@ -1,7 +1,13 @@
-node_modules/
-dist/
-.turbo/
-*.tsbuildinfo
+# Rust build output. (Cargo.lock is committed on purpose: this crate ships a
+# binary, and CI / `make` build with --locked.)
+/target
+
+# Playground scratch stores and Python bytecode from serve.py
+/playground/ui-data/
+/playground/play-data/
+/playground/__pycache__/
+
+# OS, editor, secrets
 .DS_Store
 .env
 .env.local
@@ -9,7 +15,7 @@ dist/
 # Per-user Claude Code overrides (settings.json is shared, .local is not)
 .claude/settings.local.json
 
-# Local HippoTask MCP task storage — agent scratch state, not team-shared.
-# Remove these lines if your team wants tasks committed and synced via git.
+# This repo's own HippoTask ledger: agent task state stays local by default.
+# To share tasks through git instead, see .hippotask/README.md.
 .hippotask/*
 !.hippotask/README.md

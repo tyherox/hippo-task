@@ -1,0 +1,105 @@
+# 🦛 HippoTask
+
+> **Hippocampus for modern work** — shared, auditable task memory for humans and coding agents.
+
+`hippo-task` keeps a project's tasks in one append-only file in your repo (`.hippotask/ledger.jsonl`), folded into a task list. Several agents — or several chat windows of the same agent — can work from it without stepping on each other: they claim work with expiring **leases**, and every action, including refused claims, stays in an auditable history.
+
+It's the reference implementation of the open agent-native task schema (`docs/schema-design.md`).
+
+**Status: 0.1.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
+
+*History:* HippoTask started as a TypeScript prototype of a universal interop schema with platform adapters — preserved at git tag `v0-typescript`, with its research (the 10-platform schema study, provider scorecards) in `docs/archive/typescript-v0/`. This Rust core narrows the first release to local, multi-agent task memory; platform adapters come back once sync is earned.
+
+## Install
+
+```bash
+make doctor     # checks Rust ≥ 1.89, rustfmt, clippy
+make install    # = cargo install --locked --path .   → puts `hippo-task` on your PATH
+```
+
+Or run it from this folder: `cargo run -- list`.
+
+## Use
+
+```bash
+hippo-task add "Write the RFC" --priority high --label docs --body "Scope: the v1 schema"
+hippo-task list                                  # every task, by number
+hippo-task list --state todo --sort priority     # also: --mine, --blocked, --sort created|updated
+hippo-task show 3                                # one task + its full history
+hippo-task update 3 --priority urgent --label-add api --block 2
+hippo-task update 3 --unblock 2 --unassign
+hippo-task lease 3 --minutes 30                  # claim it for 30 min (1–1440; default 10) — renew the same way
+hippo-task start 3                               # claim + set doing, in one step
+hippo-task note 3 "left off at the token refresh"
+hippo-task desc 3 "One paragraph describing the task"
+hippo-task release 3                             # hand the claim back without finishing
+hippo-task done 3                                # complete (and release)
+```
+
+Every command accepts `--json` (see `AGENTS.md` for the shapes). `release --json` also reports `released`: whether you actually held the lease.
+
+**Task ids:** the number (`3`, shown as `#3`), the full ULID, or 4+ trailing characters of it. In a shell, don't type `#3` unquoted — `#` starts a comment; type `3`.
+
+## Identity: actor + node
+
+- `HIPPO_ACTOR` / `--actor` — *who*: `agent:claude`, `human:ana`. Default: `human:local`.
+- `HIPPO_NODE` / `--node` — *which window or session*. Default: `local`.
+- **A lease belongs to actor + node.** Give every concurrent worker its own node, and two windows of the same agent can't both claim one task. Agents (`agent:…` actors) *must* set a node — without one, every command exits 2 and says how:
+
+```bash
+HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 hippo-task start 3    # → started #3
+HIPPO_ACTOR=agent:claude HIPPO_NODE=win-2 hippo-task start 3    # → exit 4: leased to agent:claude@win-1 — back off
+```
+
+## Exit codes
+
+| exit | kind | meaning |
+|---|---|---|
+| 0 | — | success |
+| 1 | `io` | the ledger couldn't be read, written, or locked |
+| 2 | `usage` | invalid input: bad value, ambiguous or too-short id, nothing to do, `--dir` doesn't exist |
+| 3 | `not_found` | no task matches the id |
+| 4 | `conflict` | leased by another worker — or, for `lease` / `start` only, the task is closed |
+
+Errors go to stderr as `error: …` (a JSON line with `--json`); results go to stdout.
+
+## The rules it enforces
+
+- **Leases:** granted if the task is open and the lease is free, expired, or already yours — otherwise exit 4, and the refused attempt is kept in the history as `(rejected)`.
+- **State belongs to the lease holder:** while a lease is active, only its holder can change the task's state — including completing or cancelling it. Everyone can still edit title, priority, labels, notes. `--force` overrides (for a human cleaning up after a crashed agent); it doesn't take over the lease — a forced state change leaves it in place until it expires or the task closes. Closing clears the lease. A closed task can't be leased or started (exit 4) — reopen it with `hippo-task update 3 --state todo`; notes, labels, title, and priority stay editable, and `hippo-task done 3` on a task that's already done is recorded but changes nothing (on a cancelled task it completes it — no refusal).
+- **Blocked is derived:** a task is blocked while any task it's blocked by is still open.
+- **Merging, not clobbering:** concurrent label/relation changes all survive; for single fields the last write wins. Repeating a change (adding a label twice) is recorded but changes nothing — shown as `(no change)`.
+
+## Data, durability, privacy
+
+- The ledger lives at `.hippotask/ledger.jsonl` inside `--dir` / `HIPPO_DIR` (default: the current folder, which must exist). One JSON event per line, append-only.
+- Writes are serialized by a file lock and flushed to disk (fsync) before a command reports success. A write that fails is rolled back, so a failed command never leaves half a change behind. Timestamps strictly increase, so the file's order is the true order of events — even within one millisecond.
+- A crash mid-write can leave one unreadable line: every command then warns about it (never silently), and it can't damage later writes.
+- **Privacy:** by default nothing about you or your machine is recorded — no username, no hostname. What you type — titles, notes, descriptions, and any actor name you choose — is stored **in cleartext, and forever** (append-only means it can't be edited out). Don't put secrets or personal data in tasks. If you commit `.hippotask/` to git, everyone who can read the repo can read it.
+
+## Develop
+
+```bash
+make verify     # fmt --check · clippy -D warnings · tests · test-integrity  (what CI runs)
+make test       # also: make lint · make fmt · make doctor · make typecheck
+make demo       # narrated demo that drives the real binary
+make play       # terminal playground: a REPL over the real binary, with identity switching to try contention
+make ui         # local playground: Live mode runs the real binary, Simulate runs in-browser
+```
+
+Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `src/store.rs` → `src/ops.rs` → `src/error.rs` → `src/render.rs` → `src/main.rs`. The tests are the spec: `src/fold.rs` (merge rules + a property test), `tests/store.rs`, `tests/ops.rs`, `tests/cli.rs`, `tests/docs.rs`.
+
+## Scope
+
+- **In 0.1.0:** single-file ledger; fold to state; ten commands; actor + node identity; leases; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
+- **Deferred until real use earns them (staging rule):** full Hybrid Logical Clock, per-task hash-chaining, snapshots/compaction, storage adapters, multi-machine sync, a GUI. The schema leaves room for each without a breaking change.
+
+## Troubleshooting
+
+- **`warning: …ledger.jsonl:N: skipped an unreadable line`** — line N is damaged (usually a crash mid-write). Everything else still works. To silence it, delete that one line by hand.
+- **`error: couldn't lock …`** — another `hippo-task` process held the ledger for over 10 s (a hung or suspended process?). Find and stop it, then retry.
+- **`error: no such directory`** — `--dir` / `HIPPO_DIR` must point at an existing folder; `hippo-task` won't create one for you (a typo would silently start a new, empty list).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

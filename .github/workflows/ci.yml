@@ -1,0 +1,60 @@
+# CI for HippoTask. Runs the same composite gate as local `make verify`:
+#   fmt --check · clippy -D warnings (incl. no-panic lints) · tests · test-integrity
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest] # macOS: its file lock + fsync paths differ from Linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the test-integrity gate diffs against the base commit
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: make verify
+        env:
+          # PRs: compare against the base branch. Pushes: against the previous commit.
+          INTEGRITY_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # No usable base — workflow_dispatch (empty) or a branch's first push
+          # (`before` is all zeros)? Compare against the default branch instead.
+          case "$INTEGRITY_BASE" in
+            ""|0000000000000000000000000000000000000000) export INTEGRITY_BASE="origin/$DEFAULT_BRANCH" ;;
+          esac
+          echo "test-integrity: comparing against $INTEGRITY_BASE"
+          make verify
+
+  # Cargo.toml promises Rust 1.89 (rust-version). Clippy only checks std APIs
+  # against that; this job proves the whole suite really builds and passes on it
+  # (it once didn't: type inference differs between compiler versions).
+  msrv:
+    name: tests on the minimum Rust (1.89)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked

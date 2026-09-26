@@ -2,7 +2,7 @@
 
 HippoTask's first implementation: a universal task-interop schema in TypeScript/Zod (`@hippotask/core`) plus adapter plumbing (`@hippotask/adapter-common`), with an MCP server and ten platform adapters planned. The code is preserved at git tag **`v0-typescript`**.
 
-In September 2026 the core moved to Rust — `hippo-task` 0.1.0, at the repo root: a local, event-sourced task ledger for multi-agent coordination and audit. Why the scope narrowed and why Rust: `docs/DECISION.md` and `docs/decisions/adr-001-language.md`.
+In September 2026 the core moved to Rust — `hippo-task` 0.1.0, at the repo root: a local, event-sourced task ledger for multi-agent coordination and audit. Why Rust: `docs/decisions/adr-001-language.md`.
 
 **Still useful:**
 - `SCHEMA.md` — the 10-platform field study (Jira, Asana, Linear, ClickUp, Trello, GitHub, Notion, Monday.com, Todoist, Planner). The input for adapters, once sync is earned.

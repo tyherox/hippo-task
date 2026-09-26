@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>hippo-task — local UI</title>
+<style>
+  :root{
+    --bg:#faf9f5;--panel:#fff;--ink:#1f1e1b;--muted:#6b6a64;--line:#e7e5df;
+    --gray-bg:#f1efe8;--gray-tx:#5f5e5a;--blue-bg:#e6f1fb;--blue-tx:#185fa5;
+    --green-bg:#eaf3de;--green-tx:#3b6d11;--amber-bg:#faeeda;--amber-tx:#854f0b;
+    --red-bg:#fcebeb;--red-tx:#a32d2d;--purple-bg:#eeedfe;--purple-tx:#534ab7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:400 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;padding:18px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:19px;font-weight:600;margin:0;display:flex;align-items:center;gap:10px}
+  .mode{font-size:11px;padding:2px 9px;border-radius:20px;font-weight:500}
+  .mode.live{background:var(--green-bg);color:var(--green-tx)}
+  .mode.sim{background:var(--amber-bg);color:var(--amber-tx)}
+  .sub{color:var(--muted);font-size:12px;margin:3px 0 14px}
+  .bar{display:flex;flex-wrap:wrap;gap:7px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:12px}
+  .lbl{font-size:12px;color:var(--muted)}
+  button{font:inherit;font-size:13px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer;color:var(--ink)}
+  button:hover{background:var(--gray-bg)}
+  button.mini{padding:3px 8px;font-size:12px}
+  button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  input,select{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
+  .cols{display:grid;grid-template-columns:1fr 300px;gap:12px}
+  @media(max-width:840px){.cols{grid-template-columns:1fr}}
+  .board{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+  .col{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px;min-height:70px}
+  .col h3{margin:2px 4px 8px;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .card{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:8px;margin-bottom:6px;cursor:pointer}
+  .card:hover{border-color:#cfcdc4}.card.sel{border-color:var(--purple-tx);box-shadow:0 0 0 1px var(--purple-tx)}
+  .card .t{font-size:13px;margin-bottom:5px}
+  .row{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+  .pill{font-size:11px;padding:1px 7px;border-radius:20px}
+  .sid{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted)}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px}
+  .panel h3{margin:0 0 8px;font-size:13px;font-weight:600}
+  .kv{font-size:12px;color:var(--muted);margin:2px 0}.kv b{color:var(--ink);font-weight:500}
+  .acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+  .hist{margin-top:9px;border-top:1px solid var(--line);padding-top:7px;max-height:130px;overflow:auto}
+  .hist div{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+  @media(max-width:840px){.grid2{grid-template-columns:1fr}}
+  .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  pre{background:#1f1e1b;color:#dcd9cf;border-radius:10px;padding:11px;overflow:auto;max-height:200px;font:11.5px/1.5 ui-monospace,Menlo,monospace;margin:8px 0 0}
+  .ok{color:#97c459}.err{color:#f0999b}.cmdline{color:#af9fe0}
+  .empty{color:var(--muted);font-size:12px;padding:6px 4px}
+  #toast{position:fixed;top:14px;right:14px;display:flex;flex-direction:column;gap:6px;z-index:9}
+  .tmsg{background:var(--ink);color:#fff;padding:8px 12px;border-radius:8px;font-size:13px;max-width:340px}
+  .tmsg.warn{background:var(--amber-tx)}
+  #feed div{padding:1px 0;font-size:12px}#feed .ag{font-weight:500;margin-right:5px}
+  .c-cc{color:var(--purple-tx)}.c-cx{color:var(--blue-tx)}.c-gm{color:var(--green-tx)}.c-gp{color:var(--amber-tx)}
+  #feed div.bad{color:var(--red-tx)}#feed div.good{color:var(--green-tx)}
+  .sec{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
+  .seclbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px}
+  #inspector textarea{width:100%;min-height:46px;font:inherit;font-size:12px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);resize:vertical;margin-bottom:6px}
+  .note{font-size:12px;padding:3px 0;border-bottom:1px solid var(--line)}.note .ag{font-weight:500;margin-right:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>hippo-task — local UI <span id="modeBadge" class="mode sim">simulate</span></h1>
+  <div class="sub" id="sub">Every button runs a real CLI command. Switch identity to test multi-agent contention. Toggle Simulate for instant in-browser testing.</div>
+
+  <div class="bar">
+    <span class="lbl">acting as</span>
+    <span id="whoami" class="mono" style="font-size:12px"></span>
+    <span style="flex:1"></span>
+    <button class="mini" data-who="human:you|n0">you</button>
+    <button class="mini" data-who="agent:claude|cc">claude · cc</button>
+    <button class="mini" data-who="agent:codex|cx">codex · cx</button>
+    <input id="cActor" placeholder="actor" style="width:104px" />
+    <input id="cNode" placeholder="node" style="width:58px" />
+    <button class="mini" id="setWho">set</button>
+  </div>
+
+  <div class="bar">
+    <input id="nTitle" placeholder="new task title" style="flex:1;min-width:150px" />
+    <select id="nPrio"><option value="none">none</option><option value="low">low</option><option value="med">med</option><option value="high">high</option><option value="urgent">urgent</option></select>
+    <input id="nLabels" placeholder="labels (comma)" style="width:120px" />
+    <button id="addBtn">add</button>
+    <span style="flex:1"></span>
+    <button class="mini" id="seedBtn">seed demo</button>
+    <button class="mini" id="resetBtn">reset</button>
+    <button class="mini" id="modeBtn">mode: …</button>
+  </div>
+
+  <div class="bar">
+    <span class="lbl">autopilot</span>
+    <button id="apRun">▶ run</button>
+    <button class="mini" id="apStep">step</button>
+    <span class="lbl">speed</span><input type="range" id="apSpeed" min="1" max="10" value="4" style="width:86px">
+    <span class="lbl">agents</span><input type="range" id="apAgents" min="2" max="4" value="2" style="width:62px"><span class="sid" id="apN">2</span>
+    <span style="flex:1"></span>
+    <span class="sid">agents drive it themselves — watch the board and feed</span>
+  </div>
+  <div class="panel" style="margin-bottom:12px;max-height:128px;overflow:auto"><div id="feed"><div class="empty">press ▶ run — virtual agents create, claim, contend, block, and complete tasks on their own</div></div></div>
+
+  <div class="cols">
+    <div class="board" id="board"></div>
+    <div class="panel" id="inspector"><div class="empty">Select a task to inspect and act on it.</div></div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <div class="row" style="justify-content:space-between"><h3 style="margin:0;font-size:13px">console</h3><span class="sid" id="modeHint"></span></div>
+      <input id="cmd" class="mono" style="width:100%;margin-top:6px" placeholder='cli, e.g.  add "Ship auth" --priority high   |   start 3   |   done 3 --force' />
+      <pre id="console"><span class="sid">output appears here</span></pre>
+    </div>
+    <div>
+      <div class="row" style="justify-content:space-between"><h3 style="margin:0;font-size:13px">event ledger <span class="sid" id="evc"></span></h3>
+        <div class="row"><button class="mini" id="copyBtn">copy</button><label><button class="mini" onclick="document.getElementById('imp').click()">import</button><input id="imp" type="file" style="display:none"></label></div>
+      </div>
+      <pre id="ledger"></pre>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+(function(){
+  // MODE "live": the board is the real CLI's own `list --json` (served by serve.py),
+  // so it can't drift from the binary. MODE "sim": an in-browser fold that mirrors
+  // src/fold.rs + src/ops.rs — for instant what-ifs with no binary.
+  let MODE="sim", events=[], LIVE=null, DETAIL=null, SEQ=0, sel=null, me={actor:"human:you",node:"n0"};
+  const $=s=>document.querySelector(s);
+  const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const short=id=>id&&id.length>6?id.slice(-6):id;
+  const closed=s=>s==="done"||s==="cancelled";
+  // Live: the CLI's own verdict (`lease.active`, decided when it ran). Sim: the browser clock.
+  const active=l=>!!l&&(MODE==="live"?l.active===true:l.expires_ms>Date.now());
+  const heldBy=(l,w)=>!!l&&l.holder===w.actor&&l.node===w.node;
+  const remTxt=l=>{const ms=l.expires_ms-Date.now();if(ms<=0)return"expired";return ms<6e4?Math.ceil(ms/1e3)+"s left":Math.ceil(ms/6e4)+"m left";};
+  const leaseRem=l=>"("+remTxt(l).replace(" left","")+")";
+  const genId=()=>(Date.now().toString(32)+Math.random().toString(32).slice(2)+"0".repeat(26)).toUpperCase().slice(0,26);
+  const eidGen=()=>String(Date.now()).padStart(15,"0")+"-"+String(SEQ++).padStart(6,"0");
+  function toast(m,w){const t=document.createElement("div");t.className="tmsg"+(w?" warn":"");t.textContent=m;$("#toast").appendChild(t);setTimeout(()=>t.remove(),3500);}
+  function logc(text,cls){const c=$("#console");if(c.querySelector(".sid"))c.innerHTML="";const d=document.createElement("div");if(cls)d.className=cls;d.textContent=text;c.appendChild(d);c.scrollTop=c.scrollHeight;}
+
+  // ---- the fold (Simulate mode) — mirrors src/fold.rs rule for rule ----
+  const order=e=>e.slice().sort((a,b)=>a.ts-b.ts||(a.node<b.node?-1:a.node>b.node?1:0)||(a.eid<b.eid?-1:a.eid>b.eid?1:0));
+  function fold(evs){
+    const T={},noops=new Set();let num=0;
+    const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+    for(const e of order(evs)){
+      const d=e.data||{},t=T[e.task];
+      if(e.type==="create"){if(t){noops.add(e.eid);continue;}num++;T[e.task]={id:e.task,num,title:d.title,body:d.body??null,state:"todo",priority:d.priority||"none",assignee:d.assignee??null,labels:new Set(),relations:[],lease:null,created:e.ts,updated:e.ts,seq:1,blocked:false};continue;}
+      if(!t){noops.add(e.eid);continue;}
+      const set=(k,v)=>{if(same(t[k],v))return false;t[k]=v;return true;};
+      let fx="none";
+      switch(e.type){
+        case"set-title":if(set("title",d.title))fx="changed";break;
+        case"set-priority":if(set("priority",d.priority))fx="changed";break;
+        case"set-assignee":if(set("assignee",d.assignee??null))fx="changed";break;
+        case"set-body":if(set("body",d.body))fx="changed";break;
+        case"set-state":{const c=set("state",d.state);let cl=false;if(closed(t.state)&&t.lease){t.lease=null;cl=true;}if(c||cl)fx="changed";break;}
+        case"label-add":if(!t.labels.has(d.label)){t.labels.add(d.label);fx="changed";}break;
+        case"label-remove":if(t.labels.delete(d.label))fx="changed";break;
+        case"relate":if(!t.relations.some(r=>r.rel===d.rel&&r.task===d.task)){t.relations.push({rel:d.rel,task:d.task});fx="changed";}break;
+        case"unrelate":{const n=t.relations.length;t.relations=t.relations.filter(r=>!(r.rel===d.rel&&r.task===d.task));if(t.relations.length!==n)fx="changed";break;}
+        case"lease":{const l=t.lease,free=!l||l.expires_ms<=e.ts||(l.holder===d.holder&&l.node===e.node);if(!closed(t.state)&&free&&set("lease",{holder:d.holder,node:e.node,expires_ms:d.expires_ms}))fx="changed";break;}
+        case"release":if(t.lease&&t.lease.holder===e.actor&&t.lease.node===e.node){t.lease=null;fx="changed";}break;
+        case"complete":{const c=set("state","done");let cl=false;if(t.lease){t.lease=null;cl=true;}if(c||cl)fx="changed";break;}
+        case"note":fx="activity";break;
+      }
+      if(fx==="changed"){t.updated=e.ts;t.seq++;}else if(fx==="activity")t.updated=e.ts;else noops.add(e.eid);
+    }
+    const open=new Set(Object.values(T).filter(x=>!closed(x.state)).map(x=>x.id));
+    for(const x of Object.values(T))x.blocked=x.relations.some(r=>r.rel==="blocked-by"&&r.task!==x.id&&open.has(r.task));
+    return{T,noops};
+  }
+  // Live: the CLI's projection. Sim: the mirror fold.
+  function current(){return MODE==="live"&&LIVE?{T:LIVE,noops:new Set()}:fold(events);}
+  function historyFor(id,F){
+    if(MODE==="live"&&DETAIL&&DETAIL.id===id)return DETAIL.events.map(e=>({e,applied:e.applied}));
+    return order(events).filter(e=>e.task===id).map(e=>({e,applied:!F.noops.has(e.eid)}));
+  }
+  const PRIO={none:["--gray-bg","--gray-tx"],low:["--blue-bg","--blue-tx"],med:["--amber-bg","--amber-tx"],high:["--amber-bg","--amber-tx"],urgent:["--red-bg","--red-tx"]};
+  const pill=(t,b,x)=>`<span class="pill" style="background:var(${b});color:var(${x})">${esc(t)}</span>`;
+  const ref=(T,id)=>T[id]?`#${T[id].num} ${esc(T[id].title)} <span class="sid">(${T[id].state})</span>`:`<span class="sid">${esc(short(id))} (unknown)</span>`;
+  const mark=h=>h.applied?"":(h.e.type==="lease"?" · (rejected)":h.e.type==="release"?" · (not the holder — no effect)":" · (no change)");
+
+  function render(){
+    const F=current(),T=F.T,cols={todo:[],doing:[],done:[]};
+    Object.values(T).sort((a,b)=>a.num-b.num).forEach(t=>(cols[t.state==="cancelled"?"done":t.state]||cols.todo).push(t));
+    $("#board").innerHTML=[["todo","Todo"],["doing","Doing"],["done","Done"]].map(([k,l])=>`<div class="col"><h3>${l} <span class="sid">${cols[k].length||""}</span></h3>${cols[k].map(card).join("")||'<div class="empty">—</div>'}</div>`).join("");
+    document.querySelectorAll(".card").forEach(c=>c.onclick=()=>{sel=c.dataset.id;if(MODE==="live")refresh().then(render);else render();});
+    $("#inspector").innerHTML=sel&&T[sel]?inspector(T[sel],F):'<div class="empty">Select a task to inspect and act on it.</div>';
+    if(sel&&T[sel])bindInspector(T);
+    $("#evc").textContent=events.length?`(${events.length})`:"";
+    $("#ledger").innerHTML=events.length?order(events).map(e=>esc(JSON.stringify({eid:short(e.eid),task:short(e.task),actor:e.actor,node:e.node,type:e.type,data:e.data}))).join("\n"):'<span class="sid">no events yet</span>';
+    $("#whoami").textContent=`${me.actor} · node ${me.node}`;
+    $("#modeBadge").className="mode "+(MODE==="live"?"live":"sim");$("#modeBadge").textContent=MODE==="live"?"live · real cli":"simulate";
+    $("#modeBtn").textContent="mode: "+(MODE==="live"?"live":"simulate");
+    $("#modeHint").textContent=MODE==="live"?"running the actual binary":"in-browser, no binary";
+  }
+  function card(t){const[b,x]=PRIO[t.priority]||PRIO.none;const nc=events.filter(e=>e.task===t.id&&e.type==="note").length;const l=t.lease;
+    return`<div class="card ${t.id===sel?"sel":""}" data-id="${esc(t.id)}"><div class="t">${esc(t.title)}</div>${t.body?`<div class="sid" style="margin:-2px 0 5px;color:var(--muted)">${esc(t.body.slice(0,80))}${t.body.length>80?"…":""}</div>`:""}<div class="row"><span class="sid">#${t.num}</span>${t.state==="cancelled"?pill("cancelled","--gray-bg","--gray-tx"):""}${t.priority!=="none"?pill(t.priority,b,x):""}${t.blocked?pill("blocked","--red-bg","--red-tx"):""}${l?pill("● "+l.holder.replace("agent:","")+"@"+l.node+leaseRem(l),active(l)?"--purple-bg":"--gray-bg",active(l)?"--purple-tx":"--gray-tx"):""}${[...t.labels].map(v=>pill(v,"--gray-bg","--gray-tx")).join("")}${nc?pill(nc+(nc>1?" notes":" note"),"--gray-bg","--gray-tx"):""}</div></div>`;}
+  function inspector(t,F){const T=F.T,others=Object.values(T).filter(x=>x.id!==t.id&&!closed(x.state)),hist=historyFor(t.id,F);return`<h3>${esc(t.title)}</h3>
+    <div class="kv">handle <b>#${t.num}</b> · <span class="sid">${esc(short(t.id))}</span></div><div class="kv">state <b>${t.state}${t.blocked?" (blocked)":""}</b></div><div class="kv">priority <b>${t.priority}</b></div>
+    ${t.lease?`<div class="kv">lease <b>${esc(t.lease.holder)}@${esc(t.lease.node)}</b> · ${remTxt(t.lease)}</div>`:""}
+    ${t.labels.size?`<div class="kv">labels <b>${[...t.labels].map(esc).join(", ")}</b></div>`:""}
+    ${t.relations.map(r=>`<div class="kv">${esc(r.rel)} <b>${ref(T,r.task)}</b></div>`).join("")}
+    <div class="acts"><button class="mini" data-a="lease">lease</button><button class="mini" data-a="start">start</button><button class="mini" data-a="release">release</button><button class="mini" data-a="done">done</button></div>
+    <div class="acts"><select id="iPrio">${["none","low","med","high","urgent"].map(p=>`<option ${p===t.priority?"selected":""}>${p}</option>`).join("")}</select><button class="mini" data-a="prio">priority</button></div>
+    <div class="acts"><input id="iLabel" placeholder="label" style="width:92px"><button class="mini" data-a="label">+ label</button></div>
+    <div class="acts"><select id="iBlock"><option value="">blocked by…</option>${others.map(o=>`<option value="${esc(o.id)}">#${o.num} · ${esc(o.title)}</option>`).join("")}</select><button class="mini" data-a="block">block</button></div>
+    <div class="sec"><div class="seclbl">description</div>
+      <textarea id="iDesc" placeholder="add a description…">${t.body?esc(t.body):""}</textarea>
+      <button class="mini" data-a="desc">save description</button></div>
+    <div class="sec"><div class="seclbl">notes</div>
+      ${(()=>{const ns=hist.filter(h=>h.e.type==="note");return ns.length?ns.map(({e})=>`<div class="note"><span class="ag ${agC(e.actor)}">${esc(e.actor.replace("agent:",""))}</span> ${esc(e.data&&e.data.text||"")} <span class="sid">${new Date(e.ts).toLocaleTimeString()}</span></div>`).join(""):`<div class="empty">no notes yet</div>`;})()}
+      <div class="acts" style="margin-top:6px"><input id="iNote" placeholder="add a note…" style="flex:1"><button class="mini" data-a="note">add note</button></div></div>
+    <div class="sec"><div class="seclbl">history</div><div class="hist">${hist.map(h=>`<div${h.applied?"":' style="opacity:.6"'}>${new Date(h.e.ts).toLocaleTimeString()} · ${esc(h.e.type)} · ${esc(h.e.actor)}@${esc(h.e.node)}${h.e.type==="note"&&h.e.data&&h.e.data.text?` · "${esc(h.e.data.text)}"`:""}${mark(h)}</div>`).join("")}</div></div>`;}
+  function bindInspector(T){document.querySelectorAll("#inspector [data-a]").forEach(b=>b.onclick=()=>{const t=T[sel];if(!t)return;const a=b.dataset.a;
+    if(a==="lease")return dispatch(["lease",t.id]);
+    if(a==="start")return dispatch(["start",t.id]);
+    if(a==="release")return dispatch(["release",t.id]);
+    if(a==="done")return dispatch(["done",t.id]);
+    if(a==="note"){const v=$("#iNote").value.trim();if(v)dispatch(["note",t.id,v]);return;}
+    if(a==="desc"){const v=$("#iDesc").value.trim();if(v)dispatch(["desc",t.id,v]);return;}
+    if(a==="prio")return dispatch(["update",t.id,"--priority",$("#iPrio").value]);
+    if(a==="label"){const v=$("#iLabel").value.trim();if(v)dispatch(["update",t.id,"--label-add",v]);return;}
+    if(a==="block"){const v=$("#iBlock").value;if(v)dispatch(["update",t.id,"--block",v]);return;}
+  });}
+
+  // ---- Simulate mode: an in-browser stand-in for the binary (mirrors src/ops.rs) ----
+  function stampTs(){const now=Date.now(),max=events.reduce((m,e)=>e.ts>m?e.ts:m,0);return now>max?now:max+1;} // store.rs: max(now, newest+1)
+  function pushEvAt(ts,task,type,data){const e={eid:eidGen(),task,ts,actor:me.actor,node:me.node,type};if(data!==undefined)e.data=data;events.push(e);}
+  function pushEv(task,type,data){pushEvAt(stampTs(),task,type,data);}
+  function resolveQ(T,q){
+    const s=String(q).trim(),dg=s.replace(/^#/,""),nf={err:{stderr:`error: no task matches '${q}' (see \`hippo-task list\`)`,code:3}};
+    if(/^\d+$/.test(dg)){const t=Object.values(T).find(x=>x.num===+dg);return t?{t}:nf;}
+    const up=s.toUpperCase();if(T[s])return{t:T[s]};if(T[up])return{t:T[up]};
+    if(s.length<4)return{err:{stderr:`error: '${q}' is too short to identify a task — use its number (e.g. 3) or at least 4 characters of its id`,code:2}};
+    const m=Object.values(T).filter(x=>x.id.toUpperCase().endsWith(up));
+    if(m.length===1)return{t:m[0]};if(!m.length)return nf;
+    return{err:{stderr:`error: '${q}' matches ${m.length} tasks (${m.map(x=>"#"+x.num).join(", ")}) — use more characters, or the number`,code:2}};
+  }
+  function simRun(argv){
+    const{T}=fold(events),cmd=argv[0],rest=argv.slice(1),flags={},pos=[];
+    const BOOL=new Set(["force","unassign","mine","blocked","json"]);
+    for(let i=0;i<rest.length;i++){const a=rest[i];if(a.startsWith("--")){const k=a.slice(2);if(BOOL.has(k))flags[k]=[true];else(flags[k]=flags[k]||[]).push(rest[++i]);}else pos.push(a);}
+    const one=k=>flags[k]&&flags[k][0],has=k=>!!flags[k];
+    const err=(code,msg)=>({stdout:"",stderr:"error: "+msg,code}),ok=out=>({stdout:out,stderr:"",code:0});
+    const who={actor:me.actor,node:me.node},W=me.actor+"@"+me.node;
+    // ops.rs required()/optional(): text is trimmed; present-but-blank is a usage error.
+    const blank=(k,what)=>has(k)&&!String(one(k)).trim()?err(2,what+" must not be empty"):null;
+    const blankLabel=k=>(flags[k]||[]).some(v=>!String(v).trim())?err(2,"label must not be empty"):null;
+    if(cmd==="add"){const title=pos.join(" ").trim();if(!title)return err(2,"title must not be empty");
+      const bad=blankLabel("label")||blank("body","description")||blank("assignee","assignee");if(bad)return bad;
+      const id=genId();pushEv(id,"create",{title,priority:one("priority")||"none",body:has("body")?String(one("body")).trim():null,assignee:has("assignee")?String(one("assignee")).trim():null});(flags.label||[]).forEach(v=>pushEv(id,"label-add",{label:String(v).trim()}));sel=id;return ok("added #"+fold(events).T[id].num+" "+id);}
+    if(cmd==="list")return ok("");
+    if(pos[0]===undefined)return err(2,"missing task id");
+    const r=resolveQ(T,pos[0]);if(r.err)return{stdout:"",...r.err};const t=r.t;
+    if(cmd==="show"){sel=t.id;return ok("");}
+    const guard=action=>{const l=t.lease;return!has("force")&&active(l)&&!heldBy(l,who)?err(4,`#${t.num} is leased to ${l.holder}@${l.node} (${remTxt(l)}) — only the holder can ${action}; wait for it to finish or expire, or pass --force`):null;};
+    const verdict=a=>heldBy(a.lease,who)?null:a.lease?err(4,`#${a.num} is leased to ${a.lease.holder}@${a.lease.node} (${remTxt(a.lease)}) — back off and pick another task`):closed(a.state)?err(4,`#${a.num} is ${a.state} — it can't be leased; reopen it first: hippo-task update ${a.num} --state todo`):err(4,`#${a.num}: the lease was not granted`);
+    if(cmd==="lease"||cmd==="start"){
+      const m=+(one("minutes")||10);if(!(m>=1&&m<=1440))return err(2,"--minutes must be between 1 and 1440 (renew to hold a task longer)");
+      const ts=stampTs();pushEvAt(ts,t.id,"lease",{holder:me.actor,expires_ms:ts+m*6e4});
+      const a=fold(events).T[t.id],v=verdict(a);if(v)return v;
+      if(cmd==="lease")return ok(`leased #${a.num} to ${W} — ${remTxt(a.lease)}`);
+      pushEv(t.id,"set-state",{state:"doing"});return ok(`started #${a.num} — leased to ${W} (${remTxt(a.lease)}), state doing`);
+    }
+    if(cmd==="done"){const g=guard("close it");if(g)return g;pushEv(t.id,"complete");return ok("done #"+t.num);}
+    if(cmd==="note"||cmd==="desc"){const text=pos.slice(1).join(" ").trim();if(!text)return err(2,(cmd==="note"?"note":"description")+" must not be empty");
+      if(cmd==="note"){pushEv(t.id,"note",{text});return ok("noted on #"+t.num);}pushEv(t.id,"set-body",{body:text});return ok("described #"+t.num);}
+    if(cmd==="release"){const held=heldBy(t.lease,who);pushEv(t.id,"release");return ok(held?"released #"+t.num:`#${t.num}: not leased by you — nothing to release`);}
+    if(cmd==="update"){
+      const keys=["title","state","priority","assignee","unassign","body","label-add","label-remove","block","unblock"];
+      if(!keys.some(has))return err(2,"nothing to update — pass at least one change (see `hippo-task update --help`)");
+      if(has("assignee")&&has("unassign"))return err(2,"--assignee and --unassign can't be combined");
+      const bad=blank("title","title")||blank("body","description")||blank("assignee","assignee")||blankLabel("label-add")||blankLabel("label-remove");if(bad)return bad;
+      const st=one("state"),pr=one("priority");
+      if(st&&!["todo","doing","done","cancelled"].includes(st))return err(2,`invalid value '${st}' for '--state'`);
+      if(pr&&!Object.keys(PRIO).includes(pr))return err(2,`invalid value '${pr}' for '--priority'`);
+      if(st){const g=guard(closed(st)?"close it":"change its state");if(g)return g;}
+      const rels=[];for(const[k,type]of[["block","relate"],["unblock","unrelate"]])for(const q of(flags[k]||[])){const rr=resolveQ(T,q);if(rr.err)return{stdout:"",...rr.err};if(rr.t.id===t.id)return err(2,`#${t.num} can't be blocked by itself`);rels.push([type,rr.t.id]);}
+      if(one("title"))pushEv(t.id,"set-title",{title:String(one("title")).trim()});
+      if(st)pushEv(t.id,"set-state",{state:st});
+      if(pr)pushEv(t.id,"set-priority",{priority:pr});
+      if(one("assignee")||has("unassign"))pushEv(t.id,"set-assignee",{assignee:has("unassign")?null:String(one("assignee")).trim()});
+      if(one("body"))pushEv(t.id,"set-body",{body:String(one("body")).trim()});
+      (flags["label-add"]||[]).forEach(v=>pushEv(t.id,"label-add",{label:String(v).trim()}));
+      (flags["label-remove"]||[]).forEach(v=>pushEv(t.id,"label-remove",{label:String(v).trim()}));
+      rels.forEach(([type,id])=>pushEv(t.id,type,{rel:"blocked-by",task:id}));
+      return ok("updated #"+t.num);
+    }
+    return err(2,"unknown command: "+cmd);
+  }
+
+  // ---- Live mode: everything goes through serve.py → the real binary ----
+  async function refresh(){
+    const j=await fetch("/state"+(sel?"?sel="+encodeURIComponent(sel):"")).then(r=>r.json());
+    events=j.events||[];
+    LIVE={};for(const v of(j.tasks||[]))LIVE[v.id]={...v,labels:new Set(v.labels),created:v.created_ms,updated:v.updated_ms};
+    DETAIL=j.detail?{id:j.detail.id,events:j.detail.events||[]}:null;
+    if(j.error)toast("cli: "+j.error,true);
+  }
+  async function dispatch(argv,who){
+    const actor=(who&&who.actor)||me.actor,node=(who&&who.node)||me.node;
+    logc((who?"$ ["+actor+"@"+node+"] hippo-task ":"$ hippo-task ")+argv.map(a=>/\s/.test(a)?`"${a}"`:a).join(" "),"cmdline");
+    let res;
+    if(MODE==="live"){res=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({args:argv,actor,node})}).then(r=>r.json());await refresh();}
+    else{const save=me;me={actor,node};res=simRun(argv);me=save;}
+    render();
+    if(res.stdout)logc(res.stdout,"ok");
+    if(res.stderr)logc(res.stderr,"err");
+    // Exit 4 = conflict ("back off"). Humans also get a toast for any other failure.
+    if(res.code===4||(res.code&&!who))toast(String(res.stderr||"").replace(/^error: /,""),true);
+    return res;
+  }
+
+  document.querySelectorAll("[data-who]").forEach(b=>b.onclick=()=>{const[a,n]=b.dataset.who.split("|");me={actor:a,node:n};render();});
+  $("#setWho").onclick=()=>{const a=$("#cActor").value.trim(),n=$("#cNode").value.trim();if(a)me.actor=a;if(n)me.node=n;render();};
+  function addTask(){const title=$("#nTitle").value.trim();if(!title){toast("enter a title first",true);return;}const argv=["add",title,"--priority",$("#nPrio").value];$("#nLabels").value.split(",").map(s=>s.trim()).filter(Boolean).forEach(l=>argv.push("--label",l));$("#nTitle").value="";$("#nLabels").value="";dispatch(argv);}
+  $("#addBtn").onclick=addTask;$("#nTitle").addEventListener("keydown",e=>{if(e.key==="Enter")addTask();});
+
+  function tokenize(s){const o=[],re=/"([^"]*)"|'([^']*)'|(\S+)/g;let m;while(m=re.exec(s))o.push(m[1]??m[2]??m[3]);return o;}
+  $("#cmd").addEventListener("keydown",e=>{if(e.key==="Enter"){const tk=tokenize(e.target.value.trim());if(tk[0]==="hippo-task")tk.shift();if(tk.length)dispatch(tk);e.target.value="";}});
+
+  $("#seedBtn").onclick=async()=>{
+    if(MODE==="live"){const r=await fetch("/seed",{method:"POST"});if(!r.ok)toast("seed failed — see the serve.py terminal",true);await refresh();render();logc("seeded demo backlog (real cli)","ok");}
+    else{events=[];sel=null;const s=me;
+      me={actor:"human:you",node:"n0"};const t1=genId(),t2=genId(),t3=genId();
+      pushEv(t1,"create",{title:"Ship auth",priority:"urgent",body:"Users get a 401 after ~1h — suspect a token-refresh race.",assignee:null});pushEv(t1,"label-add",{label:"backend"});
+      pushEv(t2,"create",{title:"Write docs",priority:"high",body:null,assignee:null});pushEv(t3,"create",{title:"Polish landing",priority:"med",body:null,assignee:null});
+      me={actor:"agent:claude",node:"cc"};let ts=stampTs();pushEvAt(ts,t1,"lease",{holder:"agent:claude",expires_ms:ts+6e5});pushEv(t1,"set-state",{state:"doing"});pushEv(t1,"note",{text:"repro'd with two tabs; looking at the refresh lock"});
+      me={actor:"agent:codex",node:"cx"};ts=stampTs();pushEvAt(ts,t2,"lease",{holder:"agent:codex",expires_ms:ts+6e5});
+      me={actor:"human:you",node:"n0"};pushEv(t2,"relate",{rel:"blocked-by",task:t1});me=s;render();
+    }
+    toast("seeded — switch identity and try starting Ship auth");
+  };
+  $("#resetBtn").onclick=async()=>{if(MODE==="live"){await fetch("/reset",{method:"POST"});await refresh();}else events=[];sel=null;render();logc("reset","ok");};
+  $("#modeBtn").onclick=()=>{MODE=MODE==="live"?"sim":"live";if(MODE==="live"){refresh().then(render);}else render();toast("mode: "+MODE);};
+  $("#copyBtn").onclick=()=>{navigator.clipboard.writeText(order(events).map(e=>JSON.stringify(e)).join("\n"));toast("copied "+events.length+" events");};
+  $("#imp").onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{events=r.result.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>JSON.parse(l));SEQ=events.length+1;sel=null;MODE="sim";render();toast("imported "+events.length+" events (simulate)");}catch(err){toast("bad ledger: "+err.message,true);}};r.readAsText(f);};
+
+  // ---- Autopilot: virtual agents follow the AGENTS.md protocol ----
+  const AGENTS=[{actor:"agent:claude",node:"cc"},{actor:"agent:codex",node:"cx"},{actor:"agent:gemini",node:"gm"},{actor:"agent:gpt",node:"gp"}];
+  const TITLES=["Refactor auth module","Add rate limiting","Fix flaky login test","Write API docs","Migrate to v2 schema","Polish onboarding","Investigate memory leak","Add dark mode","Cache CI builds","Handle empty states","Fix N+1 query","Add webhook retries","Wire up metrics","Ship export feature"];
+  const LABELS=["backend","frontend","infra","bug","docs","perf","urgent","ux"];
+  const PR=["low","med","high","urgent","none"];
+  const NOTES=["looking into this","waiting on review","found the root cause","almost done — needs a test","handing off soon","blocked on infra"];
+  const DESCS=["Users get a 401 after ~1h — suspect a token-refresh race.","Must handle empty and error states before shipping.","Blocked on the infra team's queue migration.","Keep the public API backward-compatible per the spec.","Repro: 3 tabs, rapid edits, one write disappears.","Add metrics plus a golden-path e2e test."];
+  let apRunning=false,apTimer=null,apN=2;
+  const pick=a=>a[Math.floor(Math.random()*a.length)];
+  const agC=a=>({"agent:claude":"c-cc","agent:codex":"c-cx","agent:gemini":"c-gm","agent:gpt":"c-gp"}[a]||"");
+  function feed(who,text,cls){const f=$("#feed");if(f.querySelector(".empty"))f.innerHTML="";const d=document.createElement("div");if(cls)d.className=cls;d.innerHTML=`<span class="ag ${agC(who.actor)}">${esc(who.actor.replace("agent:",""))}</span>${esc(text)}`;f.prepend(d);while(f.children.length>45)f.removeChild(f.lastChild);}
+  async function apAction(){
+    const{T}=current(),open=Object.values(T).filter(t=>!closed(t.state));
+    const who=pick(AGENTS.slice(0,apN));
+    const mine=open.filter(t=>active(t.lease)&&heldBy(t.lease,who));
+    const free=open.filter(t=>!active(t.lease)&&!t.blocked);
+    const taken=open.filter(t=>active(t.lease)&&!heldBy(t.lease,who));
+    const r=Math.random();let argv,desc;
+    if(open.length<3||r<0.25){argv=["add",pick(TITLES),"--priority",pick(PR)];if(Math.random()<0.6)argv.push("--body",pick(DESCS));desc="created a task";}
+    else if(mine.length&&r<0.55){const t=pick(mine),q=Math.random();
+      if(q<0.4){argv=["done",t.id];desc="completed #"+t.num;}
+      else if(q<0.65){argv=["update",t.id,"--label-add",pick(LABELS)];desc="labeled #"+t.num;}
+      else if(q<0.8&&open.length>1){const o=pick(open.filter(x=>x.id!==t.id));argv=["update",t.id,"--block",o.id];desc="blocked #"+t.num+" on #"+o.num;}
+      else{argv=["note",t.id,pick(NOTES)];desc="noted on #"+t.num;}}
+    else if(free.length&&r<0.85){const t=pick(free);argv=["start",t.id];desc="started #"+t.num;}
+    else if(taken.length){const t=pick(taken);argv=["start",t.id];desc="tried #"+t.num;}
+    else{argv=["add",pick(TITLES),"--priority",pick(PR)];if(Math.random()<0.6)argv.push("--body",pick(DESCS));desc="created a task";}
+    const res=await dispatch(argv,who);
+    const back=res.code===4;
+    feed(who,back?desc+" → backed off (exit 4)":res.code?desc+" → failed (exit "+res.code+")":desc,back||res.code?"bad":(argv[0]==="done"?"good":""));
+  }
+  async function apLoop(){if(!apRunning)return;await apAction();if(apRunning)apTimer=setTimeout(apLoop,1150-(+$("#apSpeed").value)*100);}
+  $("#apRun").onclick=()=>{apRunning=!apRunning;$("#apRun").textContent=apRunning?"⏸ pause":"▶ run";$("#apRun").classList.toggle("on",apRunning);if(apRunning)apLoop();else clearTimeout(apTimer);};
+  $("#apStep").onclick=()=>apAction();
+  $("#apAgents").oninput=e=>{apN=+e.target.value;$("#apN").textContent=apN;};
+
+  (async function init(){
+    try{const r=await fetch("/state");if(r.ok){MODE="live";await refresh();}else MODE="sim";}
+    catch(e){MODE="sim";$("#sub").textContent="Opened as a file — Simulate mode only (in-browser). Run  make ui  (python3 playground/serve.py)  for Live mode that drives the real binary.";}
+    render();
+  })();
+})();
+</script>
+</body>
+</html>
