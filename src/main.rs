@@ -89,6 +89,10 @@ enum Cmd {
         /// Only tasks someone holds, and how long each holder has been quiet.
         #[arg(long)]
         held: bool,
+        /// Only tasks whose title or description contains this text, ignoring
+        /// case (repeat to require several). Search before you add a task.
+        #[arg(long, value_name = "TEXT")]
+        search: Vec<String>,
         /// Order (default: task number).
         #[arg(long, value_enum)]
         sort: Option<Sort>,
@@ -132,7 +136,10 @@ enum Cmd {
         /// Remove a blocked-by relation (repeatable).
         #[arg(long)]
         unblock: Vec<String>,
-        /// With --state: change it even if another worker holds the task.
+        /// Mark this task a duplicate of another: link it to the original and cancel it.
+        #[arg(long, value_name = "ID", conflicts_with = "state")]
+        duplicate_of: Option<String>,
+        /// With --state or --duplicate-of: close it even if another worker holds the task.
         #[arg(long)]
         force: bool,
     },
@@ -285,6 +292,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
             blocked,
             ready,
             held,
+            search,
             sort,
         } => {
             let filter = Filter {
@@ -293,6 +301,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
                 blocked,
                 ready,
                 held,
+                search,
                 sort: sort.unwrap_or_default(),
             };
             let tasks = ops::list(&store, &ctx, &filter)?;
@@ -325,6 +334,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
             label_remove,
             block,
             unblock,
+            duplicate_of,
             force,
         } => {
             let changes = Changes {
@@ -339,6 +349,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
                 block,
                 unblock,
                 force,
+                duplicate_of,
             };
             let t = ops::update(&store, &ctx, &id, changes)?;
             task_out(&mut out, json, &t, now, format!("updated {}", t.handle()))?;

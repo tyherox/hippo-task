@@ -870,6 +870,23 @@ mod tests {
     }
 
     #[test]
+    fn a_duplicate_link_never_blocks() {
+        // ADR-004: only `blocked-by` drives `blocked`; `duplicate-of` is a link.
+        let kind = EventKind::Relate {
+            rel: RelType::DuplicateOf,
+            task: "T1".into(),
+        };
+        let p = fold(&[
+            create("e1", "T1", 1),
+            create("e2", "T2", 2),
+            ev("e3", "T2", 3, HUMAN, kind),
+        ]);
+        let t2 = task(&p, "T2");
+        assert_eq!(t2.relations.len(), 1);
+        assert!(!t2.blocked, "T1 is open, but T2 only duplicates it");
+    }
+
+    #[test]
     fn missing_or_self_blockers_do_not_block() {
         let p = fold(&[
             create("e1", "T1", 1),
@@ -944,7 +961,7 @@ mod tests {
                         label: rng.pick(&labels).to_string(),
                     },
                     9 => EventKind::Relate {
-                        rel: RelType::BlockedBy,
+                        rel: *rng.pick(&[RelType::BlockedBy, RelType::DuplicateOf]),
                         task: rng.pick(&tasks).to_string(),
                     },
                     10 => EventKind::Unrelate {

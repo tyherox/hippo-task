@@ -221,6 +221,7 @@
     <div class="acts"><select id="iPrio">${["none","low","med","high","urgent"].map(p=>`<option ${p===t.priority?"selected":""}>${p}</option>`).join("")}</select><button class="mini" data-a="prio">priority</button></div>
     <div class="acts"><input id="iLabel" placeholder="label" style="width:92px"><button class="mini" data-a="label">+ label</button></div>
     <div class="acts"><select id="iBlock"><option value="">blocked by…</option>${others.map(o=>`<option value="${esc(o.id)}">#${o.num} · ${esc(o.title)}</option>`).join("")}</select><button class="mini" data-a="block">block</button></div>
+    <div class="acts"><select id="iDup"><option value="">duplicate of…</option>${Object.values(T).filter(x=>x.id!==t.id).map(o=>`<option value="${esc(o.id)}">#${o.num} · ${esc(o.title)}</option>`).join("")}</select><button class="mini" data-a="dup">mark duplicate</button></div>
     <div class="sec"><div class="seclbl">description</div>
       <textarea id="iDesc" placeholder="add a description…">${t.body?esc(t.body):""}</textarea>
       <button class="mini" data-a="desc">save description</button></div>
@@ -238,6 +239,7 @@
     if(a==="prio")return dispatch(["update",t.id,"--priority",$("#iPrio").value]);
     if(a==="label"){const v=$("#iLabel").value.trim();if(v)dispatch(["update",t.id,"--label-add",v]);return;}
     if(a==="block"){const v=$("#iBlock").value;if(v)dispatch(["update",t.id,"--block",v]);return;}
+    if(a==="dup"){const v=$("#iDup").value;if(v)dispatch(["update",t.id,"--duplicate-of",v]);return;}
   });}
 
   // ---- Simulate mode: an in-browser stand-in for the binary (mirrors src/ops.rs) ----
@@ -297,14 +299,17 @@
       if(cmd==="note"){pushEv(t.id,"note",{text});return ok("noted on #"+t.num);}pushEv(t.id,"set-body",{body:text});return ok("described #"+t.num);}
     if(cmd==="release"){const held=heldBy(t.lease,who),back=held&&t.state==="doing";if(back)pushEv(t.id,"set-state",{state:"todo"});pushEv(t.id,"release");return ok(held?`released #${t.num} — back to todo`:`#${t.num}: not held by you — nothing to release`);}
     if(cmd==="update"){
-      const keys=["title","state","priority","assignee","unassign","body","label-add","label-remove","block","unblock"];
+      const keys=["title","state","priority","assignee","unassign","body","label-add","label-remove","block","unblock","duplicate-of"];
       if(!keys.some(has))return err(2,"nothing to update — pass at least one change (see `hippo-task update --help`)");
       if(has("assignee")&&has("unassign"))return err(2,"--assignee and --unassign can't be combined");
       const bad=blank("title","title")||blank("body","description")||blank("assignee","assignee")||blankLabel("label-add")||blankLabel("label-remove");if(bad)return bad;
       const st=one("state"),pr=one("priority");
       if(st&&!["todo","doing","done","cancelled"].includes(st))return err(2,`invalid value '${st}' for '--state'`);
       if(pr&&!Object.keys(PRIO).includes(pr))return err(2,`invalid value '${pr}' for '--priority'`);
+      if(st&&has("duplicate-of"))return err(2,"--duplicate-of already cancels the task — don't combine it with --state");
       if(st){const g=guard(closed(st)?"close it":"change its state");if(g)return g;}
+      // ops.rs: marking a duplicate closes the task, so the closing etiquette applies (ADR-004).
+      let dupOf=null;if(has("duplicate-of")){const g=guard("close it");if(g)return g;const rr=resolveQ(T,one("duplicate-of"));if(rr.err)return{stdout:"",...rr.err};if(rr.t.id===t.id)return err(2,`#${t.num} can't be a duplicate of itself`);dupOf=rr.t.id;}
       const rels=[];for(const[k,type]of[["block","relate"],["unblock","unrelate"]])for(const q of(flags[k]||[])){const rr=resolveQ(T,q);if(rr.err)return{stdout:"",...rr.err};if(rr.t.id===t.id)return err(2,`#${t.num} can't be blocked by itself`);rels.push([type,rr.t.id]);}
       if(one("title"))pushEv(t.id,"set-title",{title:String(one("title")).trim()});
       if(st)pushEv(t.id,"set-state",{state:st});
@@ -314,6 +319,7 @@
       (flags["label-add"]||[]).forEach(v=>pushEv(t.id,"label-add",{label:String(v).trim()}));
       (flags["label-remove"]||[]).forEach(v=>pushEv(t.id,"label-remove",{label:String(v).trim()}));
       rels.forEach(([type,id])=>pushEv(t.id,type,{rel:"blocked-by",task:id}));
+      if(dupOf){pushEv(t.id,"relate",{rel:"duplicate-of",task:dupOf});pushEv(t.id,"set-state",{state:"cancelled"});}
       return ok("updated #"+t.num);
     }
     return err(2,"unknown command: "+cmd);

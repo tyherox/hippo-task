@@ -189,6 +189,11 @@ fn exit_codes_are_the_contract() {
     assert_eq!(code(&["add", "  "]), 2, "empty title");
     assert_eq!(code(&["update", "1"]), 2, "nothing to update");
     assert_eq!(code(&["update", "1", "--block", "1"]), 2, "self-block");
+    assert_eq!(
+        code(&["update", "1", "--duplicate-of", "1"]),
+        2,
+        "not its own duplicate"
+    );
     assert_eq!(code(&["lease", "1"]), 2, "retired in 0.2.0 (ADR-003)");
     assert_eq!(
         code(&["start", "1", "--minutes", "9223372036854775807"]),
@@ -707,6 +712,31 @@ fn claims_have_no_timer_and_whoever_knows_hands_work_back() {
         "the reason is on the record: {shown}"
     );
     ok(d, CLAUDE, &["start", "3"]);
+}
+
+#[test]
+fn search_before_filing_and_mark_a_duplicate() {
+    // ADR-004, end to end.
+    let dir = TempDir::new("cli-duplicates");
+    let d = dir.path();
+    ok(d, HUMAN, &["add", "token_refresh races after an hour"]);
+    ok(d, HUMAN, &["add", "Write docs"]);
+    ok(d, HUMAN, &["add", "Token_refresh race, filed twice"]);
+
+    let found = ok(d, CLAUDE, &["list", "--search", "TOKEN_REFRESH", "--json"]).json();
+    let nums: Vec<u64> = found
+        .as_array()
+        .expect("an array of tasks")
+        .iter()
+        .map(|t| t["num"].as_u64().expect("num"))
+        .collect();
+    assert_eq!(nums, [1, 3]);
+
+    let marked = ok(d, CLAUDE, &["update", "3", "--duplicate-of", "1", "--json"]).json();
+    assert_eq!(marked["state"], "cancelled");
+    assert_eq!(marked["relations"][0]["rel"], "duplicate-of");
+    let shown = ok(d, HUMAN, &["show", "3"]).stdout;
+    assert!(shown.contains("duplicate-of #1"), "{shown}");
 }
 
 // ---------------------------------------------------------------- closed tasks

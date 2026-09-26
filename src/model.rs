@@ -72,8 +72,9 @@ impl Priority {
     }
 }
 
-/// How two tasks relate. (Only `blocked-by` has behaviour today: it drives
-/// the derived `blocked` flag. The rest are reserved for interop.)
+/// How two tasks relate. `blocked-by` drives the derived `blocked` flag;
+/// `duplicate-of` links a task to the original it repeats (ADR-004). The rest
+/// are reserved for interop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RelType {
@@ -82,6 +83,7 @@ pub enum RelType {
     Blocks,
     BlockedBy,
     RelatesTo,
+    DuplicateOf,
 }
 
 impl RelType {
@@ -93,6 +95,7 @@ impl RelType {
             RelType::Blocks => "blocks",
             RelType::BlockedBy => "blocked-by",
             RelType::RelatesTo => "relates-to",
+            RelType::DuplicateOf => "duplicate-of",
         }
     }
 }
@@ -369,9 +372,11 @@ mod tests {
             RelType::Blocks,
             RelType::BlockedBy,
             RelType::RelatesTo,
+            RelType::DuplicateOf,
         ] {
             assert_eq!(serde_json::to_value(r).unwrap(), r.as_str());
         }
+        assert_eq!(RelType::DuplicateOf.as_str(), "duplicate-of");
     }
 
     #[test]

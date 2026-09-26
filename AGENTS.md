@@ -25,6 +25,7 @@ Rules:
 - Refer to tasks by number — `3`, not `#3` (in a shell, `#` starts a comment).
 - Don't change the state of (or close) a task someone else holds — the CLI refuses with exit 4. `--force` and `hippo-task reclaim` are for humans, and for the orchestrator that launched a worker (to take back a failed worker's tasks: `reclaim --from <node> --force`) — not for you.
 - Never edit `.hippotask/ledger.jsonl` by hand: it's append-only and the CLI is its only writer.
+- Before you `add` a task, search for the most distinctive term in it — a function, a file, an error message: `hippo-task list --json --search token_refresh`. If a task already covers it, add a note there instead. If you find you're working on a duplicate, mark it: `hippo-task update 8 --duplicate-of 5 --json` links it to the original and cancels it.
 - Never put secrets or personal data in titles, notes, or descriptions — they are stored in cleartext, forever.
 
 ### Exit codes
@@ -52,7 +53,7 @@ Task object:
 - `priority` — `none` | `low` | `med` | `high` | `urgent`
 - `assignee` — who *should* own it (durable intent, not a claim), or null
 - `labels` — sorted array of strings
-- `relations` — array of `{"rel": "blocked-by", "task": "<id>"}`
+- `relations` — array of `{"rel": "blocked-by" | "duplicate-of", "task": "<id>"}`; only `blocked-by` affects `blocked`
 - `blocked` — derived: true while any blocked-by task is still open
 - `lease` — who holds the task: null, or `{"holder", "node", "expires_ms", "active", "since_ms", "last_seen_ms"}`. `holder` + `node` are the worker; `expires_ms` is null for a claim (it holds until released, the task closes, or someone reclaims it) or unix millis for a timed lease from a 0.1.x ledger; `active` is whether it was in force when the command ran; `since_ms` is when this worker's hold began; `last_seen_ms` is the holder's latest event on the task — its last sign of life
 - `created_ms`, `updated_ms` — unix millis; `seq` — how many content changes the task has had
@@ -63,7 +64,7 @@ Task object:
 
 On stderr, `--json` mode writes JSON lines: zero or more `{"warning": "…"}`, then — on failure — one error object with the fields `error` (the kind), `message`, and `exit_code`, e.g. `{"error":"conflict","message":"#3 is held by agent:codex@cx (quiet 7m) — back off and pick another task","exit_code":4}`.
 
-Stability: within 0.2.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
+Stability: within 0.3.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
 
 ## B. Changing this crate
 

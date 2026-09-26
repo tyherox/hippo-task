@@ -140,6 +140,9 @@ pub struct Changes {
     pub unblock: Vec<String>,
     /// With `state`: change it even if another worker holds the lease.
     pub force: bool,
+    /// Mark this task a duplicate of another (ADR-004): link it to the
+    /// original and cancel it. Closing etiquette applies, as for `--state`.
+    pub duplicate_of: Option<String>,
 }
 
 impl Changes {
@@ -154,6 +157,7 @@ impl Changes {
             && self.label_remove.is_empty()
             && self.block.is_empty()
             && self.unblock.is_empty()
+            && self.duplicate_of.is_none()
     }
 }
 
@@ -168,6 +172,11 @@ pub fn update(store: &Store, ctx: &Ctx, id: &str, changes: Changes) -> Result<Ta
     if changes.assignee.is_some() && changes.unassign {
         return Err(Error::Usage(
             "--assignee and --unassign can't be combined".into(),
+        ));
+    }
+    if changes.duplicate_of.is_some() && changes.state.is_some() {
+        return Err(Error::Usage(
+            "--duplicate-of already cancels the task — don't combine it with --state".into(),
         ));
     }
     let title = optional("title", changes.title.as_deref())?;
@@ -195,8 +204,16 @@ pub fn update(store: &Store, ctx: &Ctx, id: &str, changes: Changes) -> Result<Ta
         };
         guard_holder(&task, ctx, changes.force, action)?;
     }
+    // Marking a duplicate closes the task, so the same etiquette applies.
+    if changes.duplicate_of.is_some() {
+        guard_holder(&task, ctx, changes.force, "close it")?;
+    }
     let block = targets(&proj.tasks, &task, &changes.block)?;
     let unblock = targets(&proj.tasks, &task, &changes.unblock)?;
+    let original = match &changes.duplicate_of {
+        Some(input) => Some(original_of(&proj.tasks, &task, input)?),
+        None => None,
+    };
 
     let mut kinds = Vec::new();
     if let Some(title) = title {
@@ -232,6 +249,16 @@ pub fn update(store: &Store, ctx: &Ctx, id: &str, changes: Changes) -> Result<Ta
         rel: RelType::BlockedBy,
         task,
     }));
+    // ADR-004: link to the original, then cancel — a duplicate isn't finished work.
+    if let Some(original) = original {
+        kinds.push(EventKind::Relate {
+            rel: RelType::DuplicateOf,
+            task: original,
+        });
+        kinds.push(EventKind::SetState {
+            state: State::Cancelled,
+        });
+    }
 
     let events: Vec<Event> = kinds
         .into_iter()
@@ -493,15 +520,25 @@ pub struct Filter {
     /// Only tasks someone holds right now; each hold says when its holder was
     /// last seen (ADR-003).
     pub held: bool,
+    /// Only tasks whose title or description contains every one of these,
+    /// ignoring case — the check before filing a new task (ADR-004).
+    pub search: Vec<String>,
     pub sort: Sort,
 }
 
 /// The tasks matching `filter`, in `filter.sort` order.
 pub fn list(store: &Store, ctx: &Ctx, filter: &Filter) -> Result<Vec<Task>> {
+    // Lowercase once here, so matching below is a plain `contains`.
+    let terms = filter
+        .search
+        .iter()
+        .map(|term| required("search text", term).map(|t| t.to_lowercase()))
+        .collect::<Result<Vec<_>>>()?;
     let ledger = store.read()?;
     let mut tasks: Vec<Task> = fold::fold(&ledger.events)
         .tasks
         .into_values()
+        .filter(|t| terms.iter().all(|term| mentions(t, term)))
         .filter(|t| filter.state.is_none_or(|s| t.state == s))
         .filter(|t| {
             !filter.mine
@@ -522,6 +559,15 @@ pub fn list(store: &Store, ctx: &Ctx, filter: &Filter) -> Result<Vec<Task>> {
         }
     }
     Ok(tasks)
+}
+
+/// Does the task's title or description contain `term` (already lowercased)?
+/// A plain substring, not a pattern: what an agent types is what it finds.
+fn mentions(t: &Task, term: &str) -> bool {
+    t.title.to_lowercase().contains(term)
+        || t.body
+            .as_deref()
+            .is_some_and(|body| body.to_lowercase().contains(term))
 }
 
 /// Ready to pick up: open, not blocked, and nobody holds it. That includes
@@ -627,6 +673,18 @@ fn targets(tasks: &BTreeMap<String, Task>, task: &Task, inputs: &[String]) -> Re
             Ok(target.id.clone())
         })
         .collect()
+}
+
+/// Resolve `--duplicate-of`: the original must be some other task.
+fn original_of(tasks: &BTreeMap<String, Task>, task: &Task, input: &str) -> Result<String> {
+    let original = resolve(tasks, input)?;
+    if original.id == task.id {
+        return Err(Error::Usage(format!(
+            "{} can't be a duplicate of itself",
+            task.handle()
+        )));
+    }
+    Ok(original.id.clone())
 }
 
 /// Etiquette: while another worker holds an active lease, the task's *state*

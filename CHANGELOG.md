@@ -2,6 +2,16 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
+## [0.3.0] - 2026-09-27 — internal release
+
+Duplicates: find before filing, mark when found ([ADR-004](docs/decisions/adr-004-duplicates.md)). **Upgrade every tool that shares a ledger together:** 0.2.x can't read `duplicate-of` relations and skips those lines with a warning.
+
+### Added
+
+- `list --search <text>`: tasks whose title or description contains the text, ignoring case, in any state. Repeat it to require several terms. AGENTS.md now asks agents to search before they `add`.
+- `update <id> --duplicate-of <id>`: links a duplicate to its original and cancels it in one step, so it never counts as finished work. Closing etiquette applies; a task can't be a duplicate of itself, and `--state` can't be combined with it.
+- The relation `duplicate-of` in the task JSON's `relations`. Only `blocked-by` affects `blocked`.
+
 ## [0.2.0] - 2026-09-26 — internal release
 
 Claims replace timed leases ([ADR-003](docs/decisions/adr-003-claims-without-timers.md)). **This release breaks things — upgrade every tool that shares a ledger together:** 0.1.x skips `claim` and `reclaim` lines with a warning.

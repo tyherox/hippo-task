@@ -6,7 +6,7 @@
 
 It's the reference implementation of the open agent-native task schema (`docs/schema-design.md`).
 
-**Status: 0.2.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
+**Status: 0.3.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
 
 *History:* HippoTask started as a TypeScript prototype of a universal interop schema with platform adapters — preserved at git tag `v0-typescript`, with its research (the 10-platform schema study, provider scorecards) in `docs/archive/typescript-v0/`. This Rust core narrows the first release to local, multi-agent task memory; platform adapters come back once sync is earned.
 
@@ -27,9 +27,11 @@ hippo-task list                                  # every task, by number
 hippo-task list --state todo --sort priority     # also: --mine, --blocked, --sort created|updated
 hippo-task list --ready --sort priority          # what can be picked up now: open, unblocked, not held
 hippo-task list --held                           # who holds what, and how long each has been quiet
+hippo-task list --search token_refresh           # before filing: is this already on the list? (title or description)
 hippo-task show 3                                # one task + its full history
 hippo-task update 3 --priority urgent --label-add api --block 2
 hippo-task update 3 --unblock 2 --unassign
+hippo-task update 8 --duplicate-of 5             # a duplicate: link it to the original and cancel it
 hippo-task start 3                               # claim it + set doing — no timer: yours until done or released
 hippo-task note 3 "left off at the token refresh"
 hippo-task desc 3 "One paragraph describing the task"
@@ -72,6 +74,7 @@ Errors go to stderr as `error: …` (a JSON line with `--json`); results go to s
 - **Whoever knows hands work back:** `release` by the holder returns a started task to `todo`, and `release --all` gives back everything a worker holds — run it from a session's exit hook or a workflow's cleanup. A worker that can't (it crashed, or its window closed) keeps its claim until a person — or the orchestrator that launched it — runs `reclaim` (agents need `--force`); `list --held` shows who's been quiet. Every reclaim is recorded, with its reason.
 - **State belongs to the holder:** while someone holds a task, only they can change its state — including completing or cancelling it. Everyone can still edit title, priority, labels, notes. `--force` overrides the state for a human; it doesn't take the claim — `reclaim` does. Closing clears the claim. A closed task can't be started (exit 4) — reopen it with `hippo-task update 3 --state todo`; notes, labels, title, and priority stay editable, and `hippo-task done 3` on a task that's already done is recorded but changes nothing (on a cancelled task it completes it — no refusal).
 - **Blocked is derived:** a task is blocked while any task it's blocked by is still open.
+- **Duplicates are found, then marked:** `list --search` matches the title or description, ignoring case, in any state — check it before filing. `update --duplicate-of` links a duplicate to its original and cancels it, so it never counts as finished work; closing it follows the same holder rule as any other close. A duplicate link never blocks.
 - **Merging, not clobbering:** concurrent label/relation changes all survive; for single fields the last write wins. Repeating a change (adding a label twice) is recorded but changes nothing — shown as `(no change)`.
 
 ## Data, durability, privacy
@@ -95,7 +98,7 @@ Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `s
 
 ## Scope
 
-- **In 0.2.0:** single-file ledger; fold to state; ten commands; actor + node identity; claims without timers, handed back by release or reclaim; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
+- **In 0.3.0:** single-file ledger; fold to state; ten commands; actor + node identity; claims without timers, handed back by release or reclaim; search, and duplicates linked and cancelled; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
 - **Deferred until real use earns them (staging rule):** full Hybrid Logical Clock, per-task hash-chaining, snapshots/compaction, storage adapters, multi-machine sync, a GUI. The schema leaves room for each without a breaking change.
 
 ## Troubleshooting

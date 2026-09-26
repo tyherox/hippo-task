@@ -7,7 +7,7 @@ mod common;
 
 use common::TempDir;
 use hippo_task::error::Error;
-use hippo_task::model::{Event, EventKind, Priority, State, Task};
+use hippo_task::model::{Event, EventKind, Priority, RelType, Relation, State, Task};
 use hippo_task::ops::{self, Changes, Ctx, Filter, NewTask, ReclaimTarget, Sort};
 use hippo_task::store::Store;
 
@@ -389,6 +389,148 @@ fn held_lists_who_holds_what_and_when_each_was_last_seen() {
         "b hasn't been seen since it started #2"
     );
     assert!(quiet.1 < busy.1);
+}
+
+// ---- duplicates: find before filing, mark when found (ADR-004) ----
+
+fn search(store: &Store, terms: &[&str]) -> Vec<u64> {
+    let filter = Filter {
+        search: terms.iter().map(|t| t.to_string()).collect(),
+        ..Filter::default()
+    };
+    nums(&ops::list(store, &human(0), &filter).unwrap())
+}
+
+#[test]
+fn search_finds_text_in_titles_or_descriptions_in_any_state() {
+    let dir = TempDir::new("ops-search");
+    let store = Store::new(dir.path());
+    add(&store, "token_refresh races after an hour");
+    let described = NewTask {
+        body: Some("Suspect the Token_Refresh lock".into()),
+        ..new_task("Users get a 401")
+    };
+    ops::add(&store, &human(0), described).unwrap();
+    add(&store, "Write docs");
+    ops::done(&store, &human(0), "2", false).unwrap(); // the original may be done already
+
+    assert_eq!(
+        search(&store, &["TOKEN_REFRESH"]),
+        [1, 2],
+        "any case; title or description; any state"
+    );
+    assert_eq!(
+        search(&store, &["token_refresh", "hour"]),
+        [1],
+        "every term must match"
+    );
+    assert!(search(&store, &["nothing like this"]).is_empty());
+}
+
+#[test]
+fn a_blank_search_is_a_usage_error() {
+    let dir = TempDir::new("ops-search-blank");
+    let store = Store::new(dir.path());
+    let filter = Filter {
+        search: vec!["  ".into()],
+        ..Filter::default()
+    };
+    assert!(matches!(
+        ops::list(&store, &human(0), &filter),
+        Err(Error::Usage(_))
+    ));
+}
+
+fn duplicate_of(original: &str) -> Changes {
+    Changes {
+        duplicate_of: Some(original.into()),
+        ..Changes::default()
+    }
+}
+
+#[test]
+fn marking_a_duplicate_links_it_to_the_original_and_cancels_it() {
+    let dir = TempDir::new("ops-dup");
+    let store = Store::new(dir.path());
+    let original = add(&store, "token_refresh races after an hour");
+    add(&store, "token_refresh race, filed again");
+
+    let dup = ops::update(&store, &human(0), "2", duplicate_of("1")).unwrap();
+    assert_eq!(
+        dup.state,
+        State::Cancelled,
+        "a duplicate isn't finished work"
+    );
+    assert_eq!(
+        dup.relations,
+        [Relation {
+            rel: RelType::DuplicateOf,
+            task: original.id.clone()
+        }]
+    );
+    assert!(!dup.blocked, "a duplicate link never blocks");
+    assert_eq!(
+        history(&store, "2")[1..],
+        [("relate", true), ("set-state", true)]
+    );
+}
+
+#[test]
+fn a_duplicate_closed_as_done_is_corrected_to_cancelled() {
+    // Before 0.3.0, agents closed duplicates as `done`; marking one fixes the record.
+    let dir = TempDir::new("ops-dup-done");
+    let store = Store::new(dir.path());
+    add(&store, "original");
+    add(&store, "filed again");
+    ops::done(&store, &human(0), "2", false).unwrap();
+    let dup = ops::update(&store, &human(1), "2", duplicate_of("1")).unwrap();
+    assert_eq!(dup.state, State::Cancelled);
+}
+
+#[test]
+fn duplicate_of_rules() {
+    let dir = TempDir::new("ops-dup-rules");
+    let store = Store::new(dir.path());
+    add(&store, "one");
+    add(&store, "two");
+    let h = human(0);
+    assert!(
+        matches!(
+            ops::update(&store, &h, "1", duplicate_of("1")),
+            Err(Error::Usage(_))
+        ),
+        "a task isn't its own duplicate"
+    );
+    assert!(matches!(
+        ops::update(&store, &h, "1", duplicate_of("99")),
+        Err(Error::NotFound(_))
+    ));
+    let with_state = Changes {
+        state: Some(State::Todo),
+        ..duplicate_of("2")
+    };
+    assert!(
+        matches!(
+            ops::update(&store, &h, "1", with_state),
+            Err(Error::Usage(_))
+        ),
+        "--duplicate-of already sets the state"
+    );
+}
+
+#[test]
+fn only_the_holder_marks_a_held_task_as_a_duplicate() {
+    let dir = TempDir::new("ops-dup-held");
+    let store = Store::new(dir.path());
+    add(&store, "original");
+    add(&store, "filed again");
+    ops::start(&store, &ctx("agent:a", "na", 0), "2").unwrap();
+
+    let b = ctx("agent:b", "nb", 1);
+    assert!(is_conflict(ops::update(&store, &b, "2", duplicate_of("1"))));
+    let by_a = ops::update(&store, &ctx("agent:a", "na", 2), "2", duplicate_of("1")).unwrap();
+    assert_eq!(by_a.state, State::Cancelled);
+    assert!(by_a.lease.is_none(), "closing clears the claim");
 }
 
 #[test]
