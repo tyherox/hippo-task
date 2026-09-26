@@ -270,7 +270,7 @@
     if(cmd==="done"){const g=guard("close it");if(g)return g;pushEv(t.id,"complete");return ok("done #"+t.num);}
     if(cmd==="note"||cmd==="desc"){const text=pos.slice(1).join(" ").trim();if(!text)return err(2,(cmd==="note"?"note":"description")+" must not be empty");
       if(cmd==="note"){pushEv(t.id,"note",{text});return ok("noted on #"+t.num);}pushEv(t.id,"set-body",{body:text});return ok("described #"+t.num);}
-    if(cmd==="release"){const held=heldBy(t.lease,who);pushEv(t.id,"release");return ok(held?"released #"+t.num:`#${t.num}: not leased by you — nothing to release`);}
+    if(cmd==="release"){const held=heldBy(t.lease,who),back=held&&t.state==="doing";if(back)pushEv(t.id,"set-state",{state:"todo"});pushEv(t.id,"release");return ok(held?`released #${t.num} — back to todo`:`#${t.num}: not leased by you — nothing to release`);}
     if(cmd==="update"){
       const keys=["title","state","priority","assignee","unassign","body","label-add","label-remove","block","unblock"];
       if(!keys.some(has))return err(2,"nothing to update — pass at least one change (see `hippo-task update --help`)");

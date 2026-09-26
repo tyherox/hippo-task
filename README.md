@@ -25,6 +25,7 @@ Or run it from this folder: `cargo run -- list`.
 hippo-task add "Write the RFC" --priority high --label docs --body "Scope: the v1 schema"
 hippo-task list                                  # every task, by number
 hippo-task list --state todo --sort priority     # also: --mine, --blocked, --sort created|updated
+hippo-task list --ready --sort priority          # what can be picked up now: open, unblocked, not held
 hippo-task show 3                                # one task + its full history
 hippo-task update 3 --priority urgent --label-add api --block 2
 hippo-task update 3 --unblock 2 --unassign
@@ -32,7 +33,7 @@ hippo-task lease 3 --minutes 30                  # claim it for 30 min (1–1440
 hippo-task start 3                               # claim + set doing, in one step
 hippo-task note 3 "left off at the token refresh"
 hippo-task desc 3 "One paragraph describing the task"
-hippo-task release 3                             # hand the claim back without finishing
+hippo-task release 3                             # hand it back unfinished: back to todo, free for the next worker
 hippo-task done 3                                # complete (and release)
 ```
 
@@ -66,6 +67,7 @@ Errors go to stderr as `error: …` (a JSON line with `--json`); results go to s
 ## The rules it enforces
 
 - **Leases:** granted if the task is open and the lease is free, expired, or already yours — otherwise exit 4, and the refused attempt is kept in the history as `(rejected)`.
+- **Unfinished work goes back in the queue:** `release` by the holder returns a started task to `todo`. A crashed agent's task stays `doing` until someone picks it up, but `list --ready` shows it once its lease runs out.
 - **State belongs to the lease holder:** while a lease is active, only its holder can change the task's state — including completing or cancelling it. Everyone can still edit title, priority, labels, notes. `--force` overrides (for a human cleaning up after a crashed agent); it doesn't take over the lease — a forced state change leaves it in place until it expires or the task closes. Closing clears the lease. A closed task can't be leased or started (exit 4) — reopen it with `hippo-task update 3 --state todo`; notes, labels, title, and priority stay editable, and `hippo-task done 3` on a task that's already done is recorded but changes nothing (on a cancelled task it completes it — no refusal).
 - **Blocked is derived:** a task is blocked while any task it's blocked by is still open.
 - **Merging, not clobbering:** concurrent label/relation changes all survive; for single fields the last write wins. Repeating a change (adding a label twice) is recorded but changes nothing — shown as `(no change)`.

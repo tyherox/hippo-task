@@ -7,6 +7,7 @@ Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://
 ### Added
 
 - MIT license (`LICENSE`, and `license = "MIT"` in `Cargo.toml`).
+- `list --ready`: the tasks someone could pick up right now — open, not blocked, and no active lease, including `doing` work whose lease ran out. AGENTS.md's pick step uses it ([ADR-002](docs/decisions/adr-002-released-work.md)).
 - `release --json` includes `released`: true if you held the lease and gave it back, false if there was nothing of yours to release. Additive — the task object is unchanged.
 - `make play` — the playground's interactive REPL (`playground/play.sh`) as a Makefile verb.
 - `make doctor` warns when `python3` is missing (`make ui` needs it).
@@ -14,13 +15,14 @@ Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://
 
 ### Changed
 
+- `release` by the holder returns a started (`doing`) task to `todo`, so unfinished work goes back in the queue instead of sitting in `doing` with nobody on it. The fold and the event format are unchanged, and a release by anyone else still changes nothing ([ADR-002](docs/decisions/adr-002-released-work.md)).
 - Playground scripts (`demo.sh`, `play.sh`, `serve.py`) build with `--locked`, like the Makefile.
 - The playground UI's Live mode reads lease activity from the CLI's `lease.active` instead of the browser clock.
 
 ### Fixed
 
 - CI: the test-integrity gate no longer passes vacuously on `workflow_dispatch` (empty base) or on a branch's first push (all-zero base); it falls back to a usable base commit.
-- Docs realigned with the shipped model: admission-time design docs and the pre-implementation field test carry a historical banner; README and AGENTS.md say exactly when a closed task is a conflict (`lease` / `start` only), give the lease range (1–1440 minutes, default 10), and describe the lints, the integrity gate, and CI as they are.
+- Docs realigned with the shipped model: README and AGENTS.md say exactly when a closed task is a conflict (`lease` / `start` only), give the lease range (1–1440 minutes, default 10), and describe the lints, the integrity gate, and CI as they are.
 
 ## [0.1.0] - 2026-09-25 — internal release
 

@@ -120,7 +120,7 @@ No operational transforms, no merge UI either way.
 **Swarm claim/lease (the "who works on this" problem).** To stop two agents doing the same task:
 - `claim {actor, expires, beat}` event takes a **lease** on a task.
 - An agent must not start a task whose lease is unexpired and held by someone else.
-- `heartbeat` events extend the lease; a crashed agent's lease **expires** and the task becomes reclaimable (self-healing, no lock server).
+- `heartbeat` events extend the lease; a crashed agent's lease **expires** and the task becomes reclaimable (self-healing, no lock server). *(As shipped: `list --ready` finds it — see §11 D7 and ADR-002.)*
 - Contended claim resolves by HLC precedence: first valid claim wins; the loser sees `claim` occupied on next read. All of it is in the ledger (auditable).
 
 **Git-mergeability (why local-first works).** Events are immutable and append-only, so merging two branches = **union of events, re-sorted by HLC**, then re-project. Two agents editing *different* tasks never conflict. Two agents editing the *same* task produce concatenated events that fold deterministically.
@@ -255,7 +255,7 @@ The staging rule in action: the field set + event sourcing shipped; the heavy ma
 4. **Idempotent projection.** An event that changes nothing is still appended (audit) but doesn't bump `seq`/`updated_ms`; the fold reports it, and history shows it as `applied: false` — `(rejected)` for a refused lease, `(no change)` otherwise.
 5. **A note is activity**, not a content change: it bumps `updated_ms`, not `seq`.
 6. **First `create` wins**; events for a task that doesn't exist (yet, in fold order) are no-ops.
-7. **Physics vs etiquette.** Rules 1–6 live in the fold and hold for *any* ledger in *any* order (a property test checks order-independence over random ledgers). CLI policy lives above it: while a lease is active only its holder changes the task's state or closes it (`--force` overrides), agents must name their node, no self-blocking, no empty text.
+7. **Physics vs etiquette.** Rules 1–6 live in the fold and hold for *any* ledger in *any* order (a property test checks order-independence over random ledgers). CLI policy lives above it: while a lease is active only its holder changes the task's state or closes it (`--force` overrides), releasing a started task returns it to `todo`, `list --ready` finds open work nobody holds (including a crashed agent's expired `doing` task — [ADR-002](decisions/adr-002-released-work.md)), agents must name their node, no self-blocking, no empty text.
 
 ### E. Storage as shipped (§10B, first slice)
 Single `.hippotask/ledger.jsonl`. Writers: exclusive `flock` (10 s timeout → `io` error, never a hang) → read → decide → one `write_all` → `fsync` (rolled back to the previous length if either fails; a newly created file's directory is flushed too). Readers: shared lock. A torn last line is skipped with a warning and fenced off before the next append. Not yet: `snapshot.json`, compaction, other adapters.

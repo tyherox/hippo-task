@@ -115,6 +115,126 @@ fn release_is_a_no_op_for_non_holders() {
     assert!(by_a.task.lease.is_none());
 }
 
+/// Event kinds in a task's history, with whether each one changed anything.
+fn history(store: &Store, id: &str) -> Vec<(&'static str, bool)> {
+    ops::show(store, id)
+        .unwrap()
+        .history
+        .iter()
+        .map(|e| (e.event.kind.name(), e.applied))
+        .collect()
+}
+
+#[test]
+fn releasing_a_task_you_started_puts_it_back_in_the_queue() {
+    // ADR-002: `release` undoes `start` — the lease *and* the `doing`.
+    let dir = TempDir::new("ops-release-to-todo");
+    let store = Store::new(dir.path());
+    add(&store, "x");
+    let a = ctx("agent:a", "na", 0);
+    ops::start(&store, &a, "1", 10).unwrap();
+
+    let r = ops::release(&store, &a, "1").unwrap();
+    assert!(r.released);
+    assert!(r.task.lease.is_none());
+    assert_eq!(r.task.state, State::Todo, "released work goes back to todo");
+    // Undone in reverse: the holder resets the state while still holding the
+    // lease (the change is theirs to make), then lets go. Both take effect.
+    assert_eq!(
+        history(&store, "1"),
+        [
+            ("create", true),
+            ("lease", true),
+            ("set-state", true),
+            ("set-state", true),
+            ("release", true),
+        ]
+    );
+}
+
+#[test]
+fn releasing_a_task_you_only_leased_leaves_its_state_alone() {
+    let dir = TempDir::new("ops-release-leased-only");
+    let store = Store::new(dir.path());
+    add(&store, "x");
+    let a = ctx("agent:a", "na", 0);
+    ops::lease(&store, &a, "1", 10).unwrap();
+
+    let r = ops::release(&store, &a, "1").unwrap();
+    assert!(r.released);
+    assert_eq!(r.task.state, State::Todo);
+    assert_eq!(
+        history(&store, "1"),
+        [("create", true), ("lease", true), ("release", true)],
+        "nothing to reset, so no state event is recorded"
+    );
+}
+
+#[test]
+fn someone_elses_release_leaves_a_started_task_alone() {
+    let dir = TempDir::new("ops-release-not-yours");
+    let store = Store::new(dir.path());
+    add(&store, "x");
+    ops::start(&store, &ctx("agent:a", "na", 0), "1", 10).unwrap();
+
+    let by_b = ops::release(&store, &ctx("agent:b", "nb", 1), "1").unwrap();
+    assert!(!by_b.released);
+    assert_eq!(by_b.task.state, State::Doing, "b can't hand back a's work");
+    assert!(by_b
+        .task
+        .lease
+        .as_ref()
+        .is_some_and(|l| l.is_held_by("agent:a", "na")));
+}
+
+#[test]
+fn ready_is_open_unblocked_unheld_work_including_abandoned_tasks() {
+    // ADR-002: the pick query. A crashed agent's `doing` task becomes ready again
+    // once its lease runs out — the fold can't change its state, but `--ready` sees it.
+    let dir = TempDir::new("ops-ready");
+    let store = Store::new(dir.path());
+    for title in [
+        "free",
+        "leased",
+        "abandoned",
+        "blocked",
+        "closed",
+        "in progress",
+    ] {
+        add(&store, title);
+    }
+    let a = ctx("agent:a", "na", 0);
+    let b = ctx("agent:b", "nb", 0);
+    ops::lease(&store, &a, "2", 60).unwrap(); // todo, but someone holds it
+    ops::start(&store, &b, "3", 10).unwrap(); // b "crashes"; its lease runs out at 10 min
+    let blocked_by_1 = Changes {
+        block: vec!["1".into()],
+        ..Changes::default()
+    };
+    ops::update(&store, &human(0), "4", blocked_by_1).unwrap();
+    ops::done(&store, &human(0), "5", false).unwrap();
+    ops::start(&store, &a, "6", 60).unwrap(); // a is still on it
+
+    let ready = |now_ms| {
+        let filter = Filter {
+            ready: true,
+            ..Filter::default()
+        };
+        let tasks = ops::list(&store, &human(now_ms), &filter).unwrap();
+        tasks.iter().map(|t| t.num).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ready(5 * MIN),
+        [1],
+        "only the free task, while b's lease holds"
+    );
+    assert_eq!(
+        ready(20 * MIN),
+        [1, 3],
+        "b's lease ran out: its doing task is ready for someone else"
+    );
+}
+
 #[test]
 fn a_refused_start_records_only_the_attempt() {
     let dir = TempDir::new("ops-start");

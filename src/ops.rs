@@ -304,7 +304,9 @@ pub struct Released {
     pub released: bool,
 }
 
-/// Give back a lease you hold, without completing the task.
+/// Give back a lease you hold, without completing the task. If you had
+/// started it (state `doing`), it goes back to `todo` for the next worker:
+/// `release` undoes `start` (ADR-002).
 pub fn release(store: &Store, ctx: &Ctx, id: &str) -> Result<Released> {
     let mut tx = store.begin()?;
     let proj = fold::fold(tx.events());
@@ -313,9 +315,20 @@ pub fn release(store: &Store, ctx: &Ctx, id: &str) -> Result<Released> {
         .lease
         .as_ref()
         .is_some_and(|l| l.is_held_by(&ctx.actor, &ctx.node));
+    let back_to_todo = released && task.state == State::Doing;
     let task_id = task.id.clone();
-    let event = ctx.event(&mut tx, &task_id, EventKind::Release);
-    let ledger = tx.commit(vec![event])?;
+
+    // Undo `start` in reverse order: reset the state while you still hold the
+    // lease (so the change is yours to make), then let go. Only the release is
+    // recorded when there's no state to reset — or when it isn't your lease,
+    // in which case the fold records it as a no-op.
+    let mut events = Vec::with_capacity(2);
+    if back_to_todo {
+        let todo = EventKind::SetState { state: State::Todo };
+        events.push(ctx.event(&mut tx, &task_id, todo));
+    }
+    events.push(ctx.event(&mut tx, &task_id, EventKind::Release));
+    let ledger = tx.commit(events)?;
     let task = task_in(fold::fold(&ledger.events), &task_id)?;
     Ok(Released { task, released })
 }
@@ -376,6 +389,9 @@ pub struct Filter {
     /// Only tasks whose *active* lease this worker (actor + node) holds.
     pub mine: bool,
     pub blocked: bool,
+    /// Only tasks someone could pick up right now: open, not blocked, and no
+    /// active lease (so this includes abandoned `doing` work — ADR-002).
+    pub ready: bool,
     pub sort: Sort,
 }
 
@@ -393,6 +409,7 @@ pub fn list(store: &Store, ctx: &Ctx, filter: &Filter) -> Result<Vec<Task>> {
                     .is_some_and(|l| l.is_active(ctx.now_ms) && l.is_held_by(&ctx.actor, &ctx.node))
         })
         .filter(|t| !filter.blocked || t.blocked)
+        .filter(|t| !filter.ready || is_ready(t, ctx.now_ms))
         .collect();
     match filter.sort {
         Sort::Num => tasks.sort_by_key(|t| t.num),
@@ -403,6 +420,14 @@ pub fn list(store: &Store, ctx: &Ctx, filter: &Filter) -> Result<Vec<Task>> {
         }
     }
     Ok(tasks)
+}
+
+/// Ready to pick up: open, not blocked, and nobody holds an active lease.
+/// That includes `doing` work whose holder crashed: its lease ran out, but the
+/// fold can't move it back to `todo`, because time passing isn't an event.
+fn is_ready(t: &Task, now_ms: i64) -> bool {
+    let held = t.lease.as_ref().is_some_and(|l| l.is_active(now_ms));
+    !t.state.is_closed() && !t.blocked && !held
 }
 
 /// One history entry: the event, and whether it changed anything.

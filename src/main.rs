@@ -82,6 +82,10 @@ enum Cmd {
         /// Only blocked tasks.
         #[arg(long)]
         blocked: bool,
+        /// Only tasks ready to pick up: open, not blocked, and not held by anyone
+        /// (includes started tasks whose lease ran out).
+        #[arg(long)]
+        ready: bool,
         /// Order (default: task number).
         #[arg(long, value_enum)]
         sort: Option<Sort>,
@@ -257,12 +261,14 @@ fn run(cli: Cli) -> Result<(), Failure> {
             state,
             mine,
             blocked,
+            ready,
             sort,
         } => {
             let filter = Filter {
                 state,
                 mine,
                 blocked,
+                ready,
                 sort: sort.unwrap_or_default(),
             };
             let tasks = ops::list(&store, &ctx, &filter)?;
@@ -338,7 +344,9 @@ fn run(cli: Cli) -> Result<(), Failure> {
             if json {
                 print_json(&mut out, &ReleaseView::new(&r, now))?;
             } else if r.released {
-                writeln!(out, "released {}", r.task.handle())?;
+                // You held it, so it was open (closed tasks hold no lease), and a
+                // `doing` task was just reset: either way it's `todo` now.
+                writeln!(out, "released {} — back to todo", r.task.handle())?;
             } else {
                 writeln!(
                     out,

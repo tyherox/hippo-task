@@ -13,11 +13,11 @@ export HIPPO_NODE=claude-win-1        # unique per window/session; required for 
 
 The loop:
 
-1. **Pick.** `hippo-task list --json --state todo --sort priority` — choose a task with `"blocked": false` and no active lease.
+1. **Pick.** `hippo-task list --json --ready --sort priority` — every task listed is open, unblocked, and free, including work another agent released or abandoned (its lease ran out). Take the first that fits.
 2. **Claim.** `hippo-task start 3 --json` — exit 0: it's yours (lease + state doing). Exit 4: someone else has it — pick another; don't retry the same task.
 3. **Work, and leave breadcrumbs.** `hippo-task note 3 "what I did / where I stopped"` — the next agent reads these in `hippo-task show 3 --json`.
 4. **Renew** long work before the lease runs out (default 10 minutes; `--minutes` takes 1–1440): `hippo-task lease 3 --minutes 30`.
-5. **Finish** with `hippo-task done 3`. Stopping without finishing? Add a note saying why, then `hippo-task release 3`.
+5. **Finish** with `hippo-task done 3`. Stopping without finishing? Add a note saying why, then `hippo-task release 3` — it goes back to `todo` for the next agent.
 
 Rules:
 

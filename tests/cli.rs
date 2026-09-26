@@ -615,10 +615,37 @@ fn release_json_says_whether_you_held_the_lease() {
     let by_claude = ok(d, CLAUDE, &["release", "1", "--json"]).json();
     assert_eq!(by_claude["released"], true);
     assert_eq!(by_claude["lease"], Value::Null);
+    // test-weaken-ok: ADR-002 flips this pinned expectation from "doing" to "todo" — releasing a started task now hands it back (maintainer-approved behaviour change, 2026-09-26).
     assert_eq!(
-        by_claude["state"], "doing",
-        "release doesn't touch the state"
+        by_claude["state"], "todo",
+        "releasing a started task puts it back in the queue (ADR-002)"
     );
+}
+
+#[test]
+fn list_ready_is_the_pick_query_and_release_hands_work_back() {
+    let dir = TempDir::new("cli-ready");
+    let d = dir.path();
+    for title in ["a", "b", "c"] {
+        ok(d, HUMAN, &["add", title]);
+    }
+    ok(d, HUMAN, &["update", "3", "--block", "2"]);
+    ok(d, CLAUDE, &["start", "1"]);
+
+    let ready = |who: (&str, &str)| -> Vec<u64> {
+        ok(d, who, &["list", "--ready", "--json"])
+            .json()
+            .as_array()
+            .expect("an array of tasks")
+            .iter()
+            .map(|t| t["num"].as_u64().expect("num"))
+            .collect()
+    };
+    assert_eq!(ready(CODEX), [2], "#1 is held and #3 is blocked");
+
+    let released = ok(d, CLAUDE, &["release", "1"]).stdout;
+    assert!(released.contains("back to todo"), "{released}");
+    assert_eq!(ready(CODEX), [1, 2], "released work is ready again");
 }
 
 // ---------------------------------------------------------------- closed tasks
