@@ -10,10 +10,15 @@ use hippo_task::error::Error;
 use hippo_task::model::{Priority, State, Task};
 use hippo_task::ops::{self, Changes, Ctx, Filter, NewTask, ReclaimTarget, Sort};
 use hippo_task::render::{self, who, DetailView, ErrorView, ReleaseView, TaskView};
+use hippo_task::setup::{self, Choice, Place, Setup};
 use hippo_task::store::Store;
 use serde::Serialize;
-use std::io::{self, BufWriter, Write};
-use std::path::PathBuf;
+use std::io::{self, BufWriter, IsTerminal, Write};
+use std::path::{Path, PathBuf};
+
+/// The Claude Code hook `init` suggests, so a window's tasks go back when its
+/// session ends (ADR-005).
+const SESSION_END_HOOK: &str = r#"{ "hooks": { "SessionEnd": [ { "hooks": [ { "type": "command", "command": "hippo-task release --all" } ] } ] } }"#;
 use std::process::ExitCode;
 
 const AFTER_HELP: &str = "\
@@ -35,9 +40,10 @@ Agents: see AGENTS.md for the coordination protocol.";
     after_help = AFTER_HELP
 )]
 struct Cli {
-    /// Folder holding the .hippotask/ ledger (must already exist).
-    #[arg(long, env = "HIPPO_DIR", default_value = ".", global = true)]
-    dir: PathBuf,
+    /// The project folder (must already exist). Without it, hippo-task finds the
+    /// project's store from the current folder upward.
+    #[arg(long, env = "HIPPO_DIR", global = true)]
+    dir: Option<PathBuf>,
     /// Who is acting, e.g. agent:claude or human:ana. Default: human:local — no personal data is recorded unless you set this.
     #[arg(long, env = "HIPPO_ACTOR", global = true)]
     actor: Option<String>,
@@ -55,6 +61,20 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Cmd {
+    /// Choose where this project's tasks live. Asks, unless you pass --here or --folder.
+    Init {
+        /// Keep the tasks in this project, in .hippotask/.
+        #[arg(long, conflicts_with = "folder")]
+        here: bool,
+        /// Keep the tasks in another folder; the project gets a pointer to it.
+        #[arg(long, value_name = "FOLDER")]
+        folder: Option<PathBuf>,
+        /// Inside a git repository, let the tasks be committed (they're kept out by default).
+        #[arg(long)]
+        keep_in_git: bool,
+    },
+    /// Print the protocol agents follow to coordinate through hippo-task.
+    Guide,
     /// Create a task.
     Add {
         /// What needs doing.
@@ -253,16 +273,36 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), Failure> {
     let json = cli.json;
+    let mut out = BufWriter::new(io::stdout().lock());
+
+    // Setting up needs no store and no identity: an agent without a node can
+    // still read the guide.
+    match &cli.cmd {
+        Cmd::Guide => return guide_out(&mut out, json),
+        Cmd::Init {
+            here,
+            folder,
+            keep_in_git,
+        } => {
+            let asked = (*here, folder.as_deref(), *keep_in_git);
+            return init_out(&mut out, json, cli.dir.as_deref(), asked);
+        }
+        _ => {}
+    }
+
+    let folder = store_folder(cli.dir.as_deref())?;
     let store = if json {
-        Store::new(&cli.dir).on_warning(|w| eprintln!("{}", serde_json::json!({ "warning": w })))
+        Store::in_folder(folder)
+            .on_warning(|w| eprintln!("{}", serde_json::json!({ "warning": w })))
     } else {
-        Store::new(&cli.dir)
+        Store::in_folder(folder)
     };
     let ctx = Ctx::new(cli.actor, cli.node, chrono::Utc::now().timestamp_millis())?;
     let now = ctx.now_ms;
-    let mut out = BufWriter::new(io::stdout().lock());
 
     match cli.cmd {
+        // Handled above; listed so this match stays exhaustive.
+        Cmd::Init { .. } | Cmd::Guide => {}
         Cmd::Add {
             title,
             priority,
@@ -462,6 +502,182 @@ fn task_out(
     } else {
         writeln!(out, "{line}")?;
         Ok(())
+    }
+}
+
+/// Which store a command uses (ADR-005). `--dir` / `HIPPO_DIR` names the project
+/// explicitly — its `.hippotask/` is followed if it points elsewhere, and
+/// created by the first write if it's missing, as before. Otherwise the store
+/// is found from the current folder upward, and never created by accident.
+fn store_folder(dir: Option<&Path>) -> Result<PathBuf, Error> {
+    match dir {
+        Some(dir) => {
+            let marker = dir.join(setup::DIR);
+            if marker.is_dir() {
+                setup::follow(&marker)
+            } else {
+                Ok(marker)
+            }
+        }
+        None => setup::discover(&current_folder()?),
+    }
+}
+
+fn current_folder() -> Result<PathBuf, Error> {
+    std::env::current_dir().map_err(|e| Error::io("couldn't read the current folder", e))
+}
+
+fn guide_out(out: &mut impl Write, json: bool) -> Result<(), Failure> {
+    let guide = setup::guide();
+    if json {
+        print_json(out, &serde_json::json!({ "guide": guide }))?;
+    } else {
+        writeln!(out, "{guide}")?;
+    }
+    out.flush()?;
+    Ok(())
+}
+
+/// `init`: choose where the project's tasks live, set it up, and tell the
+/// person what to do next. `asked` is (--here, --folder, --keep-in-git).
+fn init_out(
+    out: &mut impl Write,
+    json: bool,
+    dir: Option<&Path>,
+    asked: (bool, Option<&Path>, bool),
+) -> Result<(), Failure> {
+    let (here, folder, keep_in_git) = asked;
+    // An explicit --dir is the project; otherwise the enclosing repository's root.
+    let project = match dir {
+        Some(dir) => dir.to_path_buf(),
+        None => setup::project_root(&current_folder()?),
+    };
+    let choice = match folder {
+        Some(folder) => Choice {
+            place: Place::Folder(
+                std::path::absolute(folder)
+                    .map_err(|e| Error::io(format!("couldn't resolve {}", folder.display()), e))?,
+            ),
+            keep_out_of_git: !keep_in_git,
+        },
+        None if here => Choice {
+            place: Place::Here,
+            keep_out_of_git: !keep_in_git,
+        },
+        // Only a person at a terminal is asked; scripts and agents must choose.
+        None if !json && io::stdin().is_terminal() => {
+            let mut choice = setup::ask(&project, &mut io::stdin().lock(), out)?;
+            choice.keep_out_of_git &= !keep_in_git;
+            choice
+        }
+        None => {
+            return Err(Error::Usage(
+                "choose where this project's tasks live: `hippo-task init --here` (in .hippotask/) or `hippo-task init --folder <path>` (anywhere else)".into(),
+            )
+            .into())
+        }
+    };
+    let setup = setup::apply(&project, &choice)?;
+    if json {
+        print_json(out, &InitView::new(&setup))?;
+    } else {
+        init_text(out, &setup)?;
+    }
+    out.flush()?;
+    Ok(())
+}
+
+fn init_text(out: &mut impl Write, s: &Setup) -> Result<(), Failure> {
+    if s.created {
+        writeln!(
+            out,
+            "✓ This project's tasks will live in {}",
+            s.store.display()
+        )?;
+    } else {
+        writeln!(
+            out,
+            "This project already keeps its tasks in {}",
+            s.store.display()
+        )?;
+    }
+    if s.pointer {
+        writeln!(
+            out,
+            "  The project points there from {}/{} (always kept out of git: it names a path on this machine).",
+            setup::DIR,
+            setup::POINTER
+        )?;
+    }
+    match (&s.repository, s.kept_out_of_git) {
+        (Some(_), true) => writeln!(out, "  Kept out of git: the store has its own .gitignore.")?,
+        (Some(repo), false) => writeln!(
+            out,
+            "  ⚠ Not kept out of git. Once committed, anyone who can read {} can read every title and note, permanently.",
+            repo.display()
+        )?,
+        (None, _) => {}
+    }
+    writeln!(out)?;
+    writeln!(out, "Next:")?;
+    writeln!(
+        out,
+        "  • Tell your agents. Add this line to the project's AGENTS.md (or CLAUDE.md):"
+    )?;
+    writeln!(
+        out,
+        "      This project tracks tasks with hippo-task; run `hippo-task guide` before you start."
+    )?;
+    writeln!(
+        out,
+        "  • Launch each agent window with its own identity, for example:"
+    )?;
+    writeln!(
+        out,
+        "      HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude"
+    )?;
+    writeln!(out, "  • So a window's tasks go back when its session ends, add this to .claude/settings.local.json:")?;
+    writeln!(out, "      {SESSION_END_HOOK}")?;
+    Ok(())
+}
+
+/// `init --json`.
+#[derive(Serialize)]
+struct InitView<'a> {
+    project: &'a Path,
+    store: StoreView<'a>,
+    pointer: bool,
+    created: bool,
+    git: GitView<'a>,
+}
+
+#[derive(Serialize)]
+struct StoreView<'a> {
+    kind: &'static str,
+    path: &'a Path,
+}
+
+#[derive(Serialize)]
+struct GitView<'a> {
+    repository: Option<&'a Path>,
+    kept_out: bool,
+}
+
+impl<'a> InitView<'a> {
+    fn new(s: &'a Setup) -> Self {
+        InitView {
+            project: &s.project,
+            store: StoreView {
+                kind: "local",
+                path: &s.store,
+            },
+            pointer: s.pointer,
+            created: s.created,
+            git: GitView {
+                repository: s.repository.as_deref(),
+                kept_out: s.kept_out_of_git,
+            },
+        }
     }
 }
 

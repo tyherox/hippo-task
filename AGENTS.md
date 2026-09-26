@@ -1,10 +1,10 @@
 # AGENTS.md — HippoTask (`hippo-task`)
 
-Two audiences: **A** is for agents *using* `hippo-task` to coordinate work (copy it into your project's own AGENTS.md). **B** is for agents *changing* this crate.
+Two audiences: **A** is for agents *using* `hippo-task` to coordinate work — `hippo-task guide` prints it, so a project's own AGENTS.md only needs to point there. **B** is for agents *changing* this crate.
 
 ## A. Coordinating work with `hippo-task`
 
-Set once per session — and give every window or session its own node:
+Your identity comes from the environment. A person usually launches each agent window with its own (`HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude`). If yours aren't set, set them once per session — and give every window or session its own node:
 
 ```bash
 export HIPPO_ACTOR=agent:claude       # who you are
@@ -24,7 +24,8 @@ Rules:
 - Always pass `--json`, parse stdout, and branch on the exit code — never scrape the text output.
 - Refer to tasks by number — `3`, not `#3` (in a shell, `#` starts a comment).
 - Don't change the state of (or close) a task someone else holds — the CLI refuses with exit 4. `--force` and `hippo-task reclaim` are for humans, and for the orchestrator that launched a worker (to take back a failed worker's tasks: `reclaim --from <node> --force`) — not for you.
-- Never edit `.hippotask/ledger.jsonl` by hand: it's append-only and the CLI is its only writer.
+- Tasks live where a person chose with `hippo-task init`, and every command finds them from any folder in the project. If a command says there's no task store, stop and tell the person — don't run `init` yourself.
+- Never edit a ledger (`ledger.jsonl`) by hand: it's append-only and the CLI is its only writer.
 - Before you `add` a task, search for the most distinctive term in it — a function, a file, an error message: `hippo-task list --json --search token_refresh`. If a task already covers it, add a note there instead. If you find you're working on a duplicate, mark it: `hippo-task update 8 --duplicate-of 5 --json` links it to the original and cancels it.
 - Never put secrets or personal data in titles, notes, or descriptions — they are stored in cleartext, forever.
 
@@ -34,7 +35,7 @@ Rules:
 |---|---|---|---|
 | 0 | — | success | carry on |
 | 1 | `io` | the ledger couldn't be read, written, or locked | if the message says "rolled back", retry once; otherwise check `hippo-task show` first. If it persists, tell the human |
-| 2 | `usage` | invalid input (bad value, ambiguous id, nothing to do) | fix the command; don't retry it unchanged |
+| 2 | `usage` | invalid input (bad value, ambiguous id, nothing to do), or no task store yet | fix the command; don't retry it unchanged. No task store: tell the human — they choose where tasks live with `hippo-task init` |
 | 3 | `not_found` | no task matches the id | re-list; the number may be wrong |
 | 4 | `conflict` | held by another worker — or, for `start`, the task is closed; or an agent reclaiming without `--force` | pick another task — don't force |
 
@@ -42,7 +43,7 @@ Closed tasks (`done` or `cancelled`): only `start` refuses them. `hippo-task upd
 
 ### JSON shapes
 
-With `--json`, stdout is exactly one JSON document. Every single-task command (`add`, `update`, `start`, `release`, `note`, `desc`, `done`, `show`) prints a **task object**; `list`, `release --all`, and `reclaim` print an array of them (for the last two, the tasks they handed back — possibly none).
+With `--json`, stdout is exactly one JSON document. `guide --json` prints `{"guide": "…"}` — this section, as text. `init --json`, for scripts, prints `{"project", "store": {"kind", "path"}, "pointer", "created", "git": {"repository", "kept_out"}}`. Every single-task command (`add`, `update`, `start`, `release`, `note`, `desc`, `done`, `show`) prints a **task object**; `list`, `release --all`, and `reclaim` print an array of them (for the last two, the tasks they handed back — possibly none).
 
 Task object:
 
@@ -64,7 +65,7 @@ Task object:
 
 On stderr, `--json` mode writes JSON lines: zero or more `{"warning": "…"}`, then — on failure — one error object with the fields `error` (the kind), `message`, and `exit_code`, e.g. `{"error":"conflict","message":"#3 is held by agent:codex@cx (quiet 7m) — back off and pick another task","exit_code":4}`.
 
-Stability: within 0.3.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
+Stability: within 0.4.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
 
 ## B. Changing this crate
 

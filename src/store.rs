@@ -1,6 +1,7 @@
 //! The single-file event ledger — the storage adapter.
 //!
-//! Layout: `<dir>/.hippotask/ledger.jsonl` — one JSON event per line, append-only.
+//! Layout: `<store folder>/ledger.jsonl` — one JSON event per line, append-only.
+//! The store folder is usually `<project>/.hippotask`; `setup` finds it (ADR-005).
 //!
 //! Guarantees the rest of the code relies on:
 //! 1. **Serialized writers.** Every write happens inside a [`Tx`] that holds an
@@ -37,9 +38,14 @@ pub const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 /// flushed). Default: print to stderr. (`Rc` so a transaction can share it.)
 type WarnFn = Rc<dyn Fn(&str)>;
 
-/// The ledger for one directory.
+/// The ledger in one store folder.
 pub struct Store {
-    dir: PathBuf,
+    /// Must already exist, so a typo can't start a new, empty list somewhere
+    /// else: the project folder for [`Store::new`], the store folder's parent
+    /// for [`Store::in_folder`].
+    base: PathBuf,
+    /// Holds `ledger.jsonl`; created by the first write if it's missing.
+    folder: PathBuf,
     path: PathBuf,
     lock_timeout: Duration,
     on_warning: WarnFn,
@@ -65,9 +71,25 @@ impl Store {
     /// you read or write.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
-        let path = dir.join(".hippotask").join("ledger.jsonl");
+        let folder = dir.join(".hippotask");
+        Self::with(dir, folder)
+    }
+
+    /// A store for `<folder>/ledger.jsonl` — a folder `hippo-task init` chose,
+    /// wherever it is (ADR-005).
+    pub fn in_folder(folder: impl Into<PathBuf>) -> Self {
+        let folder = folder.into();
+        let base = folder
+            .parent()
+            .map_or_else(|| folder.clone(), Path::to_path_buf);
+        Self::with(base, folder)
+    }
+
+    fn with(base: PathBuf, folder: PathBuf) -> Self {
+        let path = folder.join("ledger.jsonl");
         Store {
-            dir,
+            base,
+            folder,
             path,
             lock_timeout: DEFAULT_LOCK_TIMEOUT,
             on_warning: Rc::new(|w| eprintln!("warning: {w}")),
@@ -115,7 +137,7 @@ impl Store {
     /// invalidated by a concurrent writer.
     pub fn begin(&self) -> Result<Tx> {
         self.check_dir()?;
-        let tasks_dir = self.dir.join(".hippotask");
+        let tasks_dir = self.folder.clone();
         let dir_is_new = !tasks_dir.is_dir();
         let file_is_new = !self.path.exists();
         fs::create_dir_all(&tasks_dir)
@@ -138,7 +160,7 @@ impl Store {
             new_entries_in.push(tasks_dir);
         }
         if dir_is_new {
-            new_entries_in.push(self.dir.clone());
+            new_entries_in.push(self.base.clone());
         }
         Ok(Tx {
             file,
@@ -155,12 +177,12 @@ impl Store {
     /// `--dir` must name an existing folder: a typo must not silently start a
     /// brand-new, empty task list somewhere else.
     fn check_dir(&self) -> Result<()> {
-        if self.dir.is_dir() {
+        if self.base.is_dir() {
             return Ok(());
         }
         Err(Error::Usage(format!(
             "no such directory: {} — point --dir / HIPPO_DIR at an existing folder",
-            self.dir.display()
+            self.base.display()
         )))
     }
 

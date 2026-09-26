@@ -6,7 +6,7 @@
 
 It's the reference implementation of the open agent-native task schema (`docs/schema-design.md`).
 
-**Status: 0.3.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
+**Status: 0.4.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
 
 *History:* HippoTask started as a TypeScript prototype of a universal interop schema with platform adapters — preserved at git tag `v0-typescript`, with its research (the 10-platform schema study, provider scorecards) in `docs/archive/typescript-v0/`. This Rust core narrows the first release to local, multi-agent task memory; platform adapters come back once sync is earned.
 
@@ -19,9 +19,32 @@ make install    # = cargo install --locked --path .   → puts `hippo-task` on y
 
 Or run it from this folder: `cargo run -- list`.
 
+## Set up a project
+
+Choose once where a project's tasks live — from anywhere inside it:
+
+```bash
+hippo-task init          # asks: in this project (.hippotask/), or another folder
+hippo-task init --here   # or choose up front: in this project…
+hippo-task init --folder ~/tasks/my-project   # …or in another folder, outside the repository
+```
+
+- **Git:** if the tasks would sit inside a git repository, `init` keeps them out of it by default, with a `.gitignore` inside the store folder. It never edits your repository's own `.gitignore`. Pass `--keep-in-git` to let them be committed — then anyone who can read the repository can read every title and note.
+- **Another folder:** the project keeps a small pointer, `.hippotask/store.json`, which is always kept out of git (it names a path on this machine).
+- **Found from anywhere:** every command looks for the nearest `.hippotask/` in the current folder and the ones above it, never climbing out of a git repository. Without one, commands exit 2 and ask for `hippo-task init` — nothing is ever created by accident.
+- **Agents:** add one line to the project's AGENTS.md — *"This project tracks tasks with hippo-task; run `hippo-task guide` before you start."* `hippo-task guide` prints the protocol from the installed binary, so it can't go stale.
+- **Session end:** launch each agent window with its own identity (`HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude`) and add this Claude Code hook to `.claude/settings.local.json`, so the window's tasks go back when its session ends:
+
+```json
+{ "hooks": { "SessionEnd": [ { "hooks": [ { "type": "command", "command": "hippo-task release --all" } ] } ] } }
+```
+
+  It runs on `/exit`, `/clear`, logout and resume — not on a crash, which still needs a person to `reclaim`.
+
 ## Use
 
 ```bash
+hippo-task guide                                 # the protocol agents follow
 hippo-task add "Write the RFC" --priority high --label docs --body "Scope: the v1 schema"
 hippo-task list                                  # every task, by number
 hippo-task list --state todo --sort priority     # also: --mine, --blocked, --sort created|updated
@@ -79,7 +102,7 @@ Errors go to stderr as `error: …` (a JSON line with `--json`); results go to s
 
 ## Data, durability, privacy
 
-- The ledger lives at `.hippotask/ledger.jsonl` inside `--dir` / `HIPPO_DIR` (default: the current folder, which must exist). One JSON event per line, append-only.
+- The ledger is `ledger.jsonl` in the project's store — `.hippotask/`, or the folder chosen with `hippo-task init --folder`. Commands find it from the current folder upward; `--dir` / `HIPPO_DIR` names the project folder explicitly instead (it must exist). One JSON event per line, append-only.
 - Writes are serialized by a file lock and flushed to disk (fsync) before a command reports success. A write that fails is rolled back, so a failed command never leaves half a change behind. Timestamps strictly increase, so the file's order is the true order of events — even within one millisecond.
 - A crash mid-write can leave one unreadable line: every command then warns about it (never silently), and it can't damage later writes.
 - **Privacy:** by default nothing about you or your machine is recorded — no username, no hostname. What you type — titles, notes, descriptions, and any actor name you choose — is stored **in cleartext, and forever** (append-only means it can't be edited out). Don't put secrets or personal data in tasks. If you commit `.hippotask/` to git, everyone who can read the repo can read it.
@@ -94,17 +117,18 @@ make play       # terminal playground: a REPL over the real binary, with identit
 make ui         # local playground: Live mode runs the real binary, Simulate runs in-browser
 ```
 
-Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `src/store.rs` → `src/ops.rs` → `src/error.rs` → `src/render.rs` → `src/main.rs`. The tests are the spec: `src/fold.rs` (merge rules + a property test), `tests/store.rs`, `tests/ops.rs`, `tests/cli.rs`, `tests/docs.rs`.
+Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `src/store.rs` → `src/ops.rs` → `src/error.rs` → `src/render.rs` → `src/setup.rs` → `src/main.rs`. The tests are the spec: `src/fold.rs` (merge rules + a property test), `tests/store.rs`, `tests/ops.rs`, `tests/cli.rs`, `tests/setup.rs`, `tests/docs.rs`.
 
 ## Scope
 
-- **In 0.3.0:** single-file ledger; fold to state; ten commands; actor + node identity; claims without timers, handed back by release or reclaim; search, and duplicates linked and cancelled; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
+- **In 0.4.0:** single-file ledger in a store chosen with `init` and found from anywhere in the project; fold to state; twelve commands; actor + node identity; claims without timers, handed back by release or reclaim; search, and duplicates linked and cancelled; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
 - **Deferred until real use earns them (staging rule):** full Hybrid Logical Clock, per-task hash-chaining, snapshots/compaction, storage adapters, multi-machine sync, a GUI. The schema leaves room for each without a breaking change.
 
 ## Troubleshooting
 
 - **`warning: …ledger.jsonl:N: skipped an unreadable line`** — line N is damaged (usually a crash mid-write). Everything else still works. To silence it, delete that one line by hand.
 - **`error: couldn't lock …`** — another `hippo-task` process held the ledger for over 10 s (a hung or suspended process?). Find and stop it, then retry.
+- **`error: no task store here or in any folder above it`** — this project hasn't chosen where its tasks live. A person runs `hippo-task init` (from anywhere inside the project).
 - **`error: no such directory`** — `--dir` / `HIPPO_DIR` must point at an existing folder; `hippo-task` won't create one for you (a typo would silently start a new, empty list).
 
 ## License

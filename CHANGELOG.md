@@ -2,7 +2,21 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
-## [Unreleased]
+## [0.4.0] - 2026-09-27 — internal release
+
+Where tasks live: chosen once, found from anywhere ([ADR-005](docs/decisions/adr-005-where-tasks-live.md)). **This release breaks things:** commands no longer create a store by accident.
+
+### Breaking
+
+- Outside a project that has a store, commands exit 2 and ask for `hippo-task init` instead of creating `.hippotask/` in the current folder. Existing `.hippotask/` folders keep working with no setup. `--dir` / `HIPPO_DIR` still name a project explicitly and, as before, create its `.hippotask/` on the first write.
+
+### Added
+
+- `hippo-task init` chooses where a project's tasks live: in the project (`.hippotask/`, the default) or in another folder (`--folder`), which the project points to from `.hippotask/store.json`. At a terminal it asks; otherwise pass `--here` or `--folder`. It sets up the enclosing repository's root when run from a subfolder, and never moves an existing ledger.
+- Inside a git repository, `init` keeps the tasks out of git by default with a `.gitignore` in the store folder — never touching the repository's own — and `--keep-in-git` lets them be committed. A pointer is always kept out of git, since it names a path on this machine.
+- Every command finds the project's store from the current folder upward, the way git finds `.git`, without climbing out of a repository. An agent working in a subfolder no longer starts a second ledger there.
+- `hippo-task guide` prints the agent protocol from the installed binary, so a project's AGENTS.md only has to point to it. `init` suggests that line, an identity per agent window, and a Claude Code session-end hook that runs `hippo-task release --all`.
+- The pointer carries a `kind` (`local` today), so a hosted store can be added later; a store of a kind this version can't open is a clear error.
 
 ### Fixed
 
