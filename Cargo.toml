@@ -1,6 +1,6 @@
 [package]
 name = "hippo-task"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 # std `File::lock` (the ledger's advisory lock) is stable since 1.89.
 # Clippy's `incompatible_msrv` lint holds the code to this version.

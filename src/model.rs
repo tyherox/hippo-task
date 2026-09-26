@@ -121,23 +121,32 @@ pub struct Relation {
     pub task: String,
 }
 
-/// Ephemeral execution lease — "who is actively doing this right now".
+/// Who holds a task right now — "who is actively doing this".
 /// Distinct from `Task.assignee` ("who *should* own it", durable intent).
 ///
-/// A lease belongs to a **worker = actor + node**. Two windows of the same
+/// A hold belongs to a **worker = actor + node**. Two windows of the same
 /// agent (`agent:claude` on nodes `w1` and `w2`) are two workers, and the
-/// lease is what stops them from doing the same task twice.
+/// hold is what stops them from doing the same task twice.
+///
+/// Since 0.2.0 a hold is a **claim**: no timer. It lasts until the worker
+/// releases it, the task closes, or someone reclaims it (ADR-003). Ledgers
+/// written by 0.1.x also hold timed **leases**, which still expire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lease {
     pub holder: String,
     pub node: String,
-    pub expires_ms: i64,
+    /// `None` for a claim; for a 0.1.x lease, the first instant it no longer holds.
+    pub expires_ms: Option<i64>,
+    /// When this worker's unbroken hold began.
+    pub since_ms: i64,
+    /// The holder's latest event on this task — its last sign of life.
+    pub last_seen_ms: i64,
 }
 
 impl Lease {
-    /// Still in force at `now_ms`?
+    /// Still in force at `now_ms`? A claim always is; a lease until it expires.
     pub fn is_active(&self, now_ms: i64) -> bool {
-        self.expires_ms > now_ms
+        self.expires_ms.is_none_or(|expires| expires > now_ms)
     }
 
     /// Held by this worker (same actor on the same node)?
@@ -231,9 +240,21 @@ pub enum EventKind {
         rel: RelType,
         task: String,
     },
+    /// A timed hold, as 0.1.x wrote it. Still read, no longer written.
     Lease {
         holder: String,
         expires_ms: i64,
+    },
+    /// A hold with no timer (ADR-003).
+    Claim {
+        holder: String,
+    },
+    /// Take back the hold of the worker named here — for whoever knows it's
+    /// gone. Naming the holder means a stale reclaim can't clobber a newer claim.
+    Reclaim {
+        holder: String,
+        node: String,
+        reason: Option<String>,
     },
     Note {
         text: String,
@@ -257,6 +278,8 @@ impl EventKind {
             EventKind::Relate { .. } => "relate",
             EventKind::Unrelate { .. } => "unrelate",
             EventKind::Lease { .. } => "lease",
+            EventKind::Claim { .. } => "claim",
+            EventKind::Reclaim { .. } => "reclaim",
             EventKind::Note { .. } => "note",
             EventKind::Release => "release",
             EventKind::Complete => "complete",
@@ -299,6 +322,14 @@ mod tests {
             EventKind::Lease {
                 holder: "agent:a".into(),
                 expires_ms: 1,
+            },
+            EventKind::Claim {
+                holder: "agent:a".into(),
+            },
+            EventKind::Reclaim {
+                holder: "agent:a".into(),
+                node: "n1".into(),
+                reason: Some("window closed".into()),
             },
             EventKind::Note { text: "n".into() },
             EventKind::Release,
@@ -387,6 +418,34 @@ mod tests {
             r#"{"eid":"E1","task":"T1","ts":5,"actor":"agent:a","node":"n1","type":"complete"}"#
         );
         assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), done);
+
+        // 0.2.0's kinds (ADR-003) are frozen from their first release, too.
+        let claim = Event {
+            kind: EventKind::Claim {
+                holder: "agent:a".into(),
+            },
+            ..ev.clone()
+        };
+        let line = serde_json::to_string(&claim).unwrap();
+        assert_eq!(
+            line,
+            r#"{"eid":"E1","task":"T1","ts":5,"actor":"agent:a","node":"n1","type":"claim","data":{"holder":"agent:a"}}"#
+        );
+        assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), claim);
+        let reclaim = Event {
+            kind: EventKind::Reclaim {
+                holder: "agent:b".into(),
+                node: "n2".into(),
+                reason: Some("window closed".into()),
+            },
+            ..ev.clone()
+        };
+        let line = serde_json::to_string(&reclaim).unwrap();
+        assert_eq!(
+            line,
+            r#"{"eid":"E1","task":"T1","ts":5,"actor":"agent:a","node":"n1","type":"reclaim","data":{"holder":"agent:b","node":"n2","reason":"window closed"}}"#
+        );
+        assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), reclaim);
     }
 
     #[test]
@@ -410,7 +469,9 @@ mod tests {
         let l = Lease {
             holder: "agent:claude".into(),
             node: "w1".into(),
-            expires_ms: 100,
+            expires_ms: Some(100),
+            since_ms: 0,
+            last_seen_ms: 0,
         };
         assert!(l.is_held_by("agent:claude", "w1"));
         assert!(
@@ -423,5 +484,20 @@ mod tests {
             !l.is_active(100),
             "expires_ms is the first instant it no longer holds"
         );
+    }
+
+    #[test]
+    fn a_claim_has_no_expiry() {
+        // ADR-003: a claim holds until it's released, the task closes, or
+        // someone reclaims it — no amount of time passing ends it.
+        let claim = Lease {
+            holder: "agent:claude".into(),
+            node: "w1".into(),
+            expires_ms: None,
+            since_ms: 0,
+            last_seen_ms: 0,
+        };
+        assert!(claim.is_active(0));
+        assert!(claim.is_active(i64::MAX));
     }
 }

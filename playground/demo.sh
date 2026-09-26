@@ -20,7 +20,7 @@ else RED=; GRN=; BLU=; MAG=; YEL=; DIM=; BOLD=; RST=; fi
 echo "building hippo-task…"; ( cd "$CLI_DIR" && cargo build --locked ) >/dev/null 2>&1 || { echo "build failed — is Rust installed? (make doctor)"; exit 1; }
 
 as(){ local a="$1" n="$2"; shift 2; HIPPO_DIR="$D" HIPPO_ACTOR="$a" HIPPO_NODE="$n" "$BIN" "$@"; }
-colorize(){ sed -E -e "s/(\[blocked\])/${RED}\1${RST}/g" -e "s/(lease:[^ ]+)/${MAG}\1${RST}/g" -e "s/(\(rejected\))/${RED}\1${RST}/g" -e "s/ doing / ${BLU}doing${RST} /g" -e "s/ done / ${DIM}done${RST} /g" -e "s/ urgent / ${RED}urgent${RST} /g" -e "s/ high / ${YEL}high${RST} /g"; }
+colorize(){ sed -E -e "s/(\[blocked\])/${RED}\1${RST}/g" -e "s/(lease:[^ ]+)/${MAG}\1${RST}/g" -e "s/(held:[^ ]+)/${MAG}\1${RST}/g" -e "s/(\(rejected\))/${RED}\1${RST}/g" -e "s/ doing / ${BLU}doing${RST} /g" -e "s/ done / ${DIM}done${RST} /g" -e "s/ urgent / ${RED}urgent${RST} /g" -e "s/ high / ${YEL}high${RST} /g"; }
 board(){ echo; echo "  ${BOLD}board${RST}"; as human:you n0 list | colorize | sed 's/^/    /'; }
 step(){ echo; printf "${BOLD}${BLU}▸ %s${RST}\n" "$*"; }
 say(){ printf "  ${DIM}%s${RST}\n" "$*"; }

@@ -7,8 +7,8 @@ mod common;
 
 use common::TempDir;
 use hippo_task::error::Error;
-use hippo_task::model::{Priority, State, Task};
-use hippo_task::ops::{self, Changes, Ctx, Filter, NewTask, Sort};
+use hippo_task::model::{Event, EventKind, Priority, State, Task};
+use hippo_task::ops::{self, Changes, Ctx, Filter, NewTask, ReclaimTarget, Sort};
 use hippo_task::store::Store;
 
 const MIN: i64 = 60_000;
@@ -43,22 +43,73 @@ fn is_conflict<T: std::fmt::Debug>(r: Result<T, Error>) -> bool {
     matches!(r, Err(Error::Conflict(_)))
 }
 
-// ---- leases over time ----
+/// A timed lease as 0.1.x wrote it. 0.2.0 only writes claims (ADR-003), but
+/// existing ledgers still hold leases, and their rules still apply.
+fn legacy_lease(store: &Store, who: &Ctx, id: &str, minutes: i64) {
+    let task = ops::show(store, id).unwrap().task.id;
+    let mut tx = store.begin().unwrap();
+    let ts = tx.next_ts(who.now_ms);
+    let lease = Event {
+        eid: format!("legacy-lease-{ts}"),
+        task,
+        ts,
+        actor: who.actor.clone(),
+        node: who.node.clone(),
+        kind: EventKind::Lease {
+            holder: who.actor.clone(),
+            expires_ms: ts + minutes * MIN,
+        },
+    };
+    tx.commit(vec![lease]).unwrap();
+}
+
+const A_MONTH: i64 = 30 * 24 * 60 * MIN;
+
+// ---- holding a task over time ----
+
+// test-weaken-ok: ADR-003 (accepted by the maintainer) retires timed leases — `renewing_extends_your_own_lease` and the `lease --minutes` range checks tested a feature that no longer exists; legacy leases keep their expiry tests below.
+#[test]
+fn a_claim_holds_until_it_is_released() {
+    // ADR-003: no timer — a claim holds until its worker gives it back.
+    let dir = TempDir::new("ops-claim");
+    let store = Store::new(dir.path());
+    add(&store, "Ship auth");
+    let claimed = ops::start(&store, &ctx("agent:a", "na", 1_000), "1").unwrap();
+    let l = claimed.lease.clone().expect("a holds it");
+    assert_eq!(l.expires_ms, None);
+    assert!(l.since_ms < l.last_seen_ms, "claimed, then set to doing");
+    assert_eq!(
+        l.last_seen_ms, claimed.updated_ms,
+        "starting is a's latest sign of life"
+    );
+
+    let b = ctx("agent:b", "nb", 1_000 + A_MONTH);
+    assert!(
+        is_conflict(ops::start(&store, &b, "1")),
+        "a quiet claim still holds"
+    );
+    ops::release(&store, &ctx("agent:a", "na", 1_000 + A_MONTH), "1").unwrap();
+    let taken = ops::start(&store, &b, "1").unwrap();
+    assert!(taken
+        .lease
+        .expect("b holds it now")
+        .is_held_by("agent:b", "nb"));
+}
 
 #[test]
-fn a_lease_blocks_others_until_it_expires() {
+fn a_legacy_lease_blocks_others_until_it_expires() {
+    // Ledgers written by 0.1.x hold timed leases; those still expire as before.
     let dir = TempDir::new("ops-expiry");
     let store = Store::new(dir.path());
     let t = add(&store, "Ship auth");
 
-    ops::lease(&store, &ctx("agent:a", "na", 1_000), "1", 1).unwrap();
-    assert!(is_conflict(ops::lease(
+    legacy_lease(&store, &ctx("agent:a", "na", 1_000), "1", 1);
+    assert!(is_conflict(ops::start(
         &store,
         &ctx("agent:b", "nb", 1_000 + 30_000),
-        "1",
-        5
+        "1"
     )));
-    let taken = ops::lease(&store, &ctx("agent:b", "nb", 1_000 + MIN + 1), "1", 5).unwrap();
+    let taken = ops::start(&store, &ctx("agent:b", "nb", 1_000 + MIN + 1), "1").unwrap();
     let lease = taken.lease.expect("b holds it now");
     assert_eq!(
         (lease.holder.as_str(), lease.node.as_str()),
@@ -68,16 +119,17 @@ fn a_lease_blocks_others_until_it_expires() {
 }
 
 #[test]
-fn renewing_extends_your_own_lease() {
-    let dir = TempDir::new("ops-renew");
+fn mine_includes_a_claim_however_old() {
+    let dir = TempDir::new("ops-mine-claim");
     let store = Store::new(dir.path());
-    add(&store, "Ship auth");
-    let a = |now| ctx("agent:a", "na", now);
-
-    let first = ops::lease(&store, &a(1_000), "1", 10).unwrap();
-    let renewed = ops::lease(&store, &a(1_000 + 5 * MIN), "1", 10).unwrap();
-    let expiry = |t: &Task| t.lease.as_ref().map(|l| l.expires_ms);
-    assert!(expiry(&renewed) > expiry(&first));
+    add(&store, "one");
+    ops::start(&store, &ctx("agent:a", "na", 0), "1").unwrap();
+    let mine = Filter {
+        mine: true,
+        ..Filter::default()
+    };
+    let later = ops::list(&store, &ctx("agent:a", "na", A_MONTH), &mine).unwrap();
+    assert_eq!(later.iter().map(|t| t.num).collect::<Vec<_>>(), [1]);
 }
 
 #[test]
@@ -86,8 +138,8 @@ fn mine_lists_only_active_leases_held_by_this_worker() {
     let store = Store::new(dir.path());
     add(&store, "one");
     add(&store, "two");
-    ops::lease(&store, &ctx("agent:a", "na", 0), "1", 1).unwrap();
-    ops::lease(&store, &ctx("agent:a", "other-window", 0), "2", 1).unwrap();
+    legacy_lease(&store, &ctx("agent:a", "na", 0), "1", 1);
+    legacy_lease(&store, &ctx("agent:a", "other-window", 0), "2", 1);
 
     let mine = Filter {
         mine: true,
@@ -104,7 +156,7 @@ fn release_is_a_no_op_for_non_holders() {
     let dir = TempDir::new("ops-release");
     let store = Store::new(dir.path());
     add(&store, "x");
-    ops::lease(&store, &ctx("agent:a", "na", 0), "1", 10).unwrap();
+    ops::start(&store, &ctx("agent:a", "na", 0), "1").unwrap();
 
     let by_b = ops::release(&store, &ctx("agent:b", "nb", 1), "1").unwrap();
     assert!(!by_b.released);
@@ -132,7 +184,7 @@ fn releasing_a_task_you_started_puts_it_back_in_the_queue() {
     let store = Store::new(dir.path());
     add(&store, "x");
     let a = ctx("agent:a", "na", 0);
-    ops::start(&store, &a, "1", 10).unwrap();
+    ops::start(&store, &a, "1").unwrap();
 
     let r = ops::release(&store, &a, "1").unwrap();
     assert!(r.released);
@@ -144,7 +196,7 @@ fn releasing_a_task_you_started_puts_it_back_in_the_queue() {
         history(&store, "1"),
         [
             ("create", true),
-            ("lease", true),
+            ("claim", true),
             ("set-state", true),
             ("set-state", true),
             ("release", true),
@@ -158,7 +210,7 @@ fn releasing_a_task_you_only_leased_leaves_its_state_alone() {
     let store = Store::new(dir.path());
     add(&store, "x");
     let a = ctx("agent:a", "na", 0);
-    ops::lease(&store, &a, "1", 10).unwrap();
+    legacy_lease(&store, &a, "1", 10);
 
     let r = ops::release(&store, &a, "1").unwrap();
     assert!(r.released);
@@ -175,7 +227,7 @@ fn someone_elses_release_leaves_a_started_task_alone() {
     let dir = TempDir::new("ops-release-not-yours");
     let store = Store::new(dir.path());
     add(&store, "x");
-    ops::start(&store, &ctx("agent:a", "na", 0), "1", 10).unwrap();
+    ops::start(&store, &ctx("agent:a", "na", 0), "1").unwrap();
 
     let by_b = ops::release(&store, &ctx("agent:b", "nb", 1), "1").unwrap();
     assert!(!by_b.released);
@@ -187,10 +239,163 @@ fn someone_elses_release_leaves_a_started_task_alone() {
         .is_some_and(|l| l.is_held_by("agent:a", "na")));
 }
 
+// ---- handing work back: whoever knows (ADR-003) ----
+
+fn nums(tasks: &[Task]) -> Vec<u64> {
+    tasks.iter().map(|t| t.num).collect()
+}
+
+fn reclaimed(back: &[ops::Reclaimed]) -> Vec<u64> {
+    back.iter().map(|r| r.task.num).collect()
+}
+
+#[test]
+fn release_all_gives_back_everything_this_worker_holds() {
+    // For a session-end hook or a workflow's teardown.
+    let dir = TempDir::new("ops-release-all");
+    let store = Store::new(dir.path());
+    for title in ["mine", "also mine", "my other window's", "someone else's"] {
+        add(&store, title);
+    }
+    let a = ctx("agent:a", "na", 0);
+    ops::start(&store, &a, "1").unwrap();
+    ops::start(&store, &a, "2").unwrap();
+    ops::start(&store, &ctx("agent:a", "other-window", 0), "3").unwrap();
+    ops::start(&store, &ctx("agent:b", "nb", 0), "4").unwrap();
+
+    let released = ops::release_all(&store, &a).unwrap();
+    assert_eq!(nums(&released), [1, 2]);
+    assert!(released
+        .iter()
+        .all(|t| t.state == State::Todo && t.lease.is_none()));
+    for id in ["3", "4"] {
+        assert!(ops::show(&store, id).unwrap().task.lease.is_some(), "#{id}");
+    }
+    assert!(
+        ops::release_all(&store, &a).unwrap().is_empty(),
+        "nothing left"
+    );
+}
+
+#[test]
+fn a_person_reclaims_a_crashed_workers_task() {
+    let dir = TempDir::new("ops-reclaim");
+    let store = Store::new(dir.path());
+    add(&store, "x");
+    ops::start(&store, &ctx("agent:a", "na", 0), "1").unwrap();
+
+    let target = ReclaimTarget::Task("1".into());
+    let back = ops::reclaim(&store, &human(MIN), &target, Some("window closed"), false).unwrap();
+    assert_eq!(reclaimed(&back), [1]);
+    assert!(
+        back[0].from.is_held_by("agent:a", "na"),
+        "it says whose claim it was"
+    );
+    assert_eq!(back[0].task.state, State::Todo, "back in the queue");
+    assert!(back[0].task.lease.is_none());
+    let history = history(&store, "1");
+    assert_eq!(
+        history[history.len() - 2..],
+        [("reclaim", true), ("set-state", true)]
+    );
+    let detail = ops::show(&store, "1").unwrap();
+    let reclaim = &detail.history[history.len() - 2].event;
+    assert!(
+        matches!(&reclaim.kind, EventKind::Reclaim { holder, node, reason }
+            if holder == "agent:a" && node == "na" && reason.as_deref() == Some("window closed")),
+        "the history says whose claim was taken back, and why: {reclaim:?}"
+    );
+    ops::start(&store, &ctx("agent:b", "nb", 2 * MIN), "1").unwrap();
+}
+
+#[test]
+fn an_agent_needs_force_to_reclaim() {
+    // --force is for the process that launched the worker (AGENTS.md).
+    let dir = TempDir::new("ops-reclaim-agent");
+    let store = Store::new(dir.path());
+    add(&store, "x");
+    ops::start(&store, &ctx("agent:a", "na", 0), "1").unwrap();
+    let orchestrator = ctx("agent:a", "orchestrator", 1);
+    let target = ReclaimTarget::Task("1".into());
+
+    assert!(is_conflict(ops::reclaim(
+        &store,
+        &orchestrator,
+        &target,
+        None,
+        false
+    )));
+    let back = ops::reclaim(&store, &orchestrator, &target, None, true).unwrap();
+    assert_eq!(reclaimed(&back), [1]);
+}
+
+#[test]
+fn reclaiming_a_task_nobody_holds_changes_nothing() {
+    let dir = TempDir::new("ops-reclaim-free");
+    let store = Store::new(dir.path());
+    add(&store, "x");
+    let before = store.read().unwrap().events.len();
+    let target = ReclaimTarget::Task("1".into());
+    let back = ops::reclaim(&store, &human(0), &target, None, false).unwrap();
+    assert!(back.is_empty());
+    assert_eq!(
+        store.read().unwrap().events.len(),
+        before,
+        "nothing to record"
+    );
+}
+
+#[test]
+fn reclaim_from_a_node_takes_back_everything_it_holds() {
+    let dir = TempDir::new("ops-reclaim-node");
+    let store = Store::new(dir.path());
+    for title in ["a", "b", "c"] {
+        add(&store, title);
+    }
+    ops::start(&store, &ctx("agent:a", "wf-1", 0), "1").unwrap();
+    ops::start(&store, &ctx("agent:a", "wf-1", 0), "2").unwrap();
+    ops::start(&store, &ctx("agent:a", "wf-2", 0), "3").unwrap();
+
+    let target = ReclaimTarget::Node("wf-1".into());
+    let back = ops::reclaim(&store, &human(MIN), &target, Some("worker failed"), false).unwrap();
+    assert_eq!(reclaimed(&back), [1, 2]);
+    assert!(ops::show(&store, "3").unwrap().task.lease.is_some());
+}
+
+#[test]
+fn held_lists_who_holds_what_and_when_each_was_last_seen() {
+    let dir = TempDir::new("ops-held");
+    let store = Store::new(dir.path());
+    for title in ["busy", "quiet", "free"] {
+        add(&store, title);
+    }
+    let a = |now| ctx("agent:a", "na", now);
+    ops::start(&store, &a(0), "1").unwrap();
+    ops::start(&store, &ctx("agent:b", "nb", 0), "2").unwrap();
+    let noted = ops::note(&store, &a(5 * MIN), "1", "halfway").unwrap();
+
+    let held = Filter {
+        held: true,
+        ..Filter::default()
+    };
+    let tasks = ops::list(&store, &human(10 * MIN), &held).unwrap();
+    assert_eq!(nums(&tasks), [1, 2]);
+    let seen = |t: &Task| t.lease.as_ref().map(|l| (l.since_ms, l.last_seen_ms));
+    let busy = seen(&tasks[0]).expect("held");
+    assert_eq!(busy.1, noted.updated_ms, "a's note is a sign of life");
+    let quiet = seen(&tasks[1]).expect("held");
+    assert_eq!(
+        quiet.1, tasks[1].updated_ms,
+        "b hasn't been seen since it started #2"
+    );
+    assert!(quiet.1 < busy.1);
+}
+
 #[test]
 fn ready_is_open_unblocked_unheld_work_including_abandoned_tasks() {
-    // ADR-002: the pick query. A crashed agent's `doing` task becomes ready again
-    // once its lease runs out — the fold can't change its state, but `--ready` sees it.
+    // ADR-002: the pick query. A `doing` task whose 0.1.x lease ran out is ready
+    // again — the fold can't change its state, but `--ready` sees it. A claim
+    // (ADR-003) never runs out: it stays held until given back or reclaimed.
     let dir = TempDir::new("ops-ready");
     let store = Store::new(dir.path());
     for title in [
@@ -205,15 +410,20 @@ fn ready_is_open_unblocked_unheld_work_including_abandoned_tasks() {
     }
     let a = ctx("agent:a", "na", 0);
     let b = ctx("agent:b", "nb", 0);
-    ops::lease(&store, &a, "2", 60).unwrap(); // todo, but someone holds it
-    ops::start(&store, &b, "3", 10).unwrap(); // b "crashes"; its lease runs out at 10 min
+    legacy_lease(&store, &a, "2", 60); // todo, but someone holds it
+    legacy_lease(&store, &b, "3", 10); // b started #3 under 0.1.x and "crashed":
+    let doing = Changes {
+        state: Some(State::Doing),
+        ..Changes::default()
+    };
+    ops::update(&store, &b, "3", doing).unwrap(); // its lease runs out at 10 min
     let blocked_by_1 = Changes {
         block: vec!["1".into()],
         ..Changes::default()
     };
     ops::update(&store, &human(0), "4", blocked_by_1).unwrap();
     ops::done(&store, &human(0), "5", false).unwrap();
-    ops::start(&store, &a, "6", 60).unwrap(); // a is still on it
+    ops::start(&store, &a, "6").unwrap(); // a is still on it, however long it takes
 
     let ready = |now_ms| {
         let filter = Filter {
@@ -233,6 +443,11 @@ fn ready_is_open_unblocked_unheld_work_including_abandoned_tasks() {
         [1, 3],
         "b's lease ran out: its doing task is ready for someone else"
     );
+    assert_eq!(
+        ready(A_MONTH),
+        [1, 2, 3],
+        "#2's old lease has run out too; a's claim on #6 never does"
+    );
 }
 
 #[test]
@@ -240,20 +455,19 @@ fn a_refused_start_records_only_the_attempt() {
     let dir = TempDir::new("ops-start");
     let store = Store::new(dir.path());
     add(&store, "x");
-    ops::start(&store, &ctx("agent:a", "na", 0), "1", 10).unwrap();
+    ops::start(&store, &ctx("agent:a", "na", 0), "1").unwrap();
     let before = store.read().unwrap().events.len();
 
     assert!(is_conflict(ops::start(
         &store,
         &ctx("agent:b", "nb", 1),
-        "1",
-        10
+        "1"
     )));
     let after = store.read().unwrap().events;
     assert_eq!(
         after.len(),
         before + 1,
-        "the rejected lease is audited, nothing else"
+        "the rejected claim is audited, nothing else"
     );
     let detail = ops::show(&store, "1").unwrap();
     let last = detail.history.last().unwrap();
@@ -269,7 +483,7 @@ fn only_the_holder_closes_a_leased_task_unless_forced() {
     let dir = TempDir::new("ops-close");
     let store = Store::new(dir.path());
     add(&store, "x");
-    ops::start(&store, &ctx("agent:a", "na", 0), "1", 10).unwrap();
+    ops::start(&store, &ctx("agent:a", "na", 0), "1").unwrap();
     let b = ctx("agent:b", "nb", 1);
 
     assert!(is_conflict(ops::done(&store, &b, "1", false)));
@@ -299,7 +513,7 @@ fn the_holder_can_close_and_that_clears_the_lease() {
     let store = Store::new(dir.path());
     add(&store, "x");
     let a = ctx("agent:a", "na", 0);
-    ops::start(&store, &a, "1", 10).unwrap();
+    ops::start(&store, &a, "1").unwrap();
     let done = ops::update(
         &store,
         &a,
@@ -312,8 +526,8 @@ fn the_holder_can_close_and_that_clears_the_lease() {
     .unwrap();
     assert!(done.lease.is_none());
     assert!(
-        is_conflict(ops::lease(&store, &ctx("agent:b", "nb", 1), "1", 10)),
-        "closed tasks can't be leased"
+        is_conflict(ops::start(&store, &ctx("agent:b", "nb", 1), "1")),
+        "closed tasks can't be claimed"
     );
 }
 
@@ -322,7 +536,7 @@ fn an_expired_lease_does_not_protect_the_task() {
     let dir = TempDir::new("ops-expired-close");
     let store = Store::new(dir.path());
     add(&store, "x");
-    ops::lease(&store, &ctx("agent:a", "na", 0), "1", 1).unwrap();
+    legacy_lease(&store, &ctx("agent:a", "na", 0), "1", 1);
     let t = ops::done(&store, &ctx("agent:b", "nb", 2 * MIN), "1", false).unwrap();
     assert_eq!(t.state, State::Done);
 }
@@ -359,11 +573,13 @@ fn empty_input_is_a_usage_error() {
         Err(Error::Usage(_))
     ));
     assert!(matches!(
-        ops::lease(&store, &h, "1", 0),
-        Err(Error::Usage(_))
-    ));
-    assert!(matches!(
-        ops::lease(&store, &h, "1", 1_441),
+        ops::reclaim(
+            &store,
+            &h,
+            &ReclaimTarget::Task("1".into()),
+            Some("  "),
+            false
+        ),
         Err(Error::Usage(_))
     ));
 }
@@ -560,7 +776,7 @@ fn only_the_holder_changes_the_state_of_a_leased_task() {
     add(&store, "x");
     let a = ctx("agent:a", "na", 0);
     let b = ctx("agent:b", "nb", 1);
-    ops::start(&store, &a, "1", 10).unwrap();
+    ops::start(&store, &a, "1").unwrap();
     let to_todo = Changes {
         state: Some(State::Todo),
         ..Changes::default()
@@ -588,7 +804,7 @@ fn only_the_holder_changes_the_state_of_a_leased_task() {
         ops::update(&store, &b, "1", forced).unwrap().state,
         State::Todo
     );
-    ops::start(&store, &a, "1", 10).unwrap();
+    ops::start(&store, &a, "1").unwrap();
     assert_eq!(
         ops::update(&store, &a, "1", to_todo).unwrap().state,
         State::Todo
@@ -603,7 +819,7 @@ fn a_forced_state_change_leaves_the_holders_lease_intact() {
     add(&store, "x");
     let a = ctx("agent:a", "na", 0);
     let b = ctx("agent:b", "nb", 1);
-    ops::lease(&store, &a, "1", 10).unwrap();
+    legacy_lease(&store, &a, "1", 10);
 
     let forced = ops::update(
         &store,
@@ -621,7 +837,7 @@ fn a_forced_state_change_leaves_the_holders_lease_intact() {
     assert!(lease.is_held_by("agent:a", "na"));
     assert!(lease.is_active(b.now_ms));
     assert!(
-        is_conflict(ops::lease(&store, &b, "1", 10)),
+        is_conflict(ops::start(&store, &b, "1")),
         "b still can't take it"
     );
 }

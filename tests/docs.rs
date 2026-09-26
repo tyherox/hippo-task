@@ -109,7 +109,7 @@ fn exit_codes_are_documented_exactly() {
 fn every_json_field_is_documented_for_agents() {
     let dir = TempDir::new("docs-json");
     ok(dir.path(), HUMAN, &["add", "x", "--label", "l"]);
-    ok(dir.path(), HUMAN, &["lease", "1"]);
+    ok(dir.path(), HUMAN, &["start", "1"]);
     let shown = ok(dir.path(), HUMAN, &["show", "1", "--json"]).json();
     let released = ok(dir.path(), HUMAN, &["release", "1", "--json"]).json();
 

@@ -120,7 +120,7 @@ No operational transforms, no merge UI either way.
 **Swarm claim/lease (the "who works on this" problem).** To stop two agents doing the same task:
 - `claim {actor, expires, beat}` event takes a **lease** on a task.
 - An agent must not start a task whose lease is unexpired and held by someone else.
-- `heartbeat` events extend the lease; a crashed agent's lease **expires** and the task becomes reclaimable (self-healing, no lock server). *(As shipped: `list --ready` finds it — see §11 D7 and ADR-002.)*
+- `heartbeat` events extend the lease; a crashed agent's lease **expires** and the task becomes reclaimable (self-healing, no lock server). *(Superseded by [ADR-003](decisions/adr-003-claims-without-timers.md): agents can't heartbeat on a clock, so since 0.2.0 a claim has no timer — whoever knows the worker is gone hands its work back with `release --all` or `reclaim`.)*
 - Contended claim resolves by HLC precedence: first valid claim wins; the loser sees `claim` occupied on next read. All of it is in the ledger (auditable).
 
 **Git-mergeability (why local-first works).** Events are immutable and append-only, so merging two branches = **union of events, re-sorted by HLC**, then re-project. Two agents editing *different* tasks never conflict. Two agents editing the *same* task produce concatenated events that fold deterministically.
@@ -233,29 +233,32 @@ The staging rule in action: the field set + event sourcing shipped; the heavy ma
 - `ts` is unix millis, **strictly increasing within a ledger**: written as `max(wall clock, newest ts + 1)` under the file lock. That's the physical half of the HLC (§4) — enough for one machine, where ledger order now equals time order. The logical counter and cross-machine receive rule arrive with sync.
 - Not yet on the event: `hlc`, `wall`, `prev`, `hash` (full HLC and the per-task hash-DAG are deferred). Adding them later is additive.
 - Unit verbs (`release`, `complete`) carry no `data`.
+- **0.2.0 adds two kinds** ([ADR-003](decisions/adr-003-claims-without-timers.md)): `claim` `{holder}` — a hold with no timer — and `reclaim` `{holder, node, reason}`, which takes back the hold it names. 0.2.0 no longer writes `lease`, but still folds it, timer and all.
 
-### B. Verbs as shipped (14) vs the §2.1 design verbs
+### B. Verbs as shipped (16) vs the §2.1 design verbs
 | Design verb | Shipped as |
 |---|---|
 | `create` | `create` `{title, priority, body, assignee}` |
 | `update` | one verb per field: `set-title`, `set-state`, `set-priority`, `set-assignee`, `set-body` (per-field LWW falls out naturally) |
 | collection ops (§4) | `label-add`, `label-remove`, `relate`, `unrelate` |
-| `claim` | `lease` `{holder, expires_ms}` (the §10 rename) |
-| `heartbeat` | a `lease` by the *same worker* renews it |
+| `claim` | 0.1.x: `lease` `{holder, expires_ms}` (the §10 rename). 0.2.0: `claim` `{holder}` — no timer (ADR-003) |
+| `heartbeat` | 0.1.x: a `lease` by the *same worker* renewed it. 0.2.0: none — any event the holder writes on its task is a sign of life (`last_seen_ms`) |
 | `release`, `note`, `complete` | same names |
+| *(new)* | `reclaim` `{holder, node, reason}` — whoever knows a worker is gone takes back its hold (ADR-003) |
 | `cancel` | `set-state` → `cancelled` |
 
 ### C. Task projection as shipped (JSON: `hippo-task show --json`)
-`id`, `num`, `title`, `body`, `state`, `priority`, `assignee`, `labels`, `relations` (`{"rel":"blocked-by","task":…}` — kebab-case, not the `blockedBy` of §2.2), `blocked`, `lease` (`{holder, node, expires_ms, active}`), `created_ms`, `updated_ms`, `seq`. Not yet implemented: `refs`, `ext` (still reserved). `num` is a **derived** friendly handle (`#3`, creation order) — stable on one machine, but a future multi-machine merge may renumber it; the ULID `id` is the permanent identity.
+`id`, `num`, `title`, `body`, `state`, `priority`, `assignee`, `labels`, `relations` (`{"rel":"blocked-by","task":…}` — kebab-case, not the `blockedBy` of §2.2), `blocked`, `lease` (`{holder, node, expires_ms, active, since_ms, last_seen_ms}`; `expires_ms` is `null` for a claim), `created_ms`, `updated_ms`, `seq`. Not yet implemented: `refs`, `ext` (still reserved). `num` is a **derived** friendly handle (`#3`, creation order) — stable on one machine, but a future multi-machine merge may renumber it; the ULID `id` is the permanent identity.
 
 ### D. Rules decided while hardening (refinements of §3–§5)
-1. **A lease belongs to actor + node** (refines §10A). `node` isn't only the tiebreak: two windows of the same agent are two *workers*, and only the holding worker can renew or release. Without this, two Claude windows could both "hold" one task — the first real use case.
-2. **Closed tasks hold no lease.** Entering done/cancelled clears the lease; a lease on a closed task is rejected.
+1. **A hold (a claim, or a 0.1.x lease) belongs to actor + node** (refines §10A). `node` isn't only the tiebreak: two windows of the same agent are two *workers*, and only the holding worker can release it (a person or orchestrator can reclaim it — D8). Without this, two Claude windows could both "hold" one task — the first real use case.
+2. **Closed tasks hold nothing.** Entering done/cancelled clears the hold; a claim (or lease) on a closed task is rejected.
 3. **Blocked = has a blocked-by target that is still *open*** (refines §3's "isn't done"): a cancelled blocker no longer blocks; missing or self references never block.
-4. **Idempotent projection.** An event that changes nothing is still appended (audit) but doesn't bump `seq`/`updated_ms`; the fold reports it, and history shows it as `applied: false` — `(rejected)` for a refused lease, `(no change)` otherwise.
+4. **Idempotent projection.** An event that changes nothing is still appended (audit) but doesn't bump `seq`/`updated_ms`; the fold reports it, and history shows it as `applied: false` — `(rejected)` for a refused claim or lease, `(no change)` otherwise.
 5. **A note is activity**, not a content change: it bumps `updated_ms`, not `seq`.
 6. **First `create` wins**; events for a task that doesn't exist (yet, in fold order) are no-ops.
-7. **Physics vs etiquette.** Rules 1–6 live in the fold and hold for *any* ledger in *any* order (a property test checks order-independence over random ledgers). CLI policy lives above it: while a lease is active only its holder changes the task's state or closes it (`--force` overrides), releasing a started task returns it to `todo`, `list --ready` finds open work nobody holds (including a crashed agent's expired `doing` task — [ADR-002](decisions/adr-002-released-work.md)), agents must name their node, no self-blocking, no empty text.
+7. **Physics vs etiquette.** Rules 1–6 live in the fold and hold for *any* ledger in *any* order (a property test checks order-independence over random ledgers). CLI policy lives above it: while a task is held only its holder changes its state or closes it (`--force` overrides), releasing a started task returns it to `todo`, `list --ready` finds open work nobody holds (including a crashed agent's expired `doing` task — [ADR-002](decisions/adr-002-released-work.md)), agents must name their node, no self-blocking, no empty text.
+8. **Claims have no timer** ([ADR-003](decisions/adr-003-claims-without-timers.md)). Agents can't renew on a clock, so since 0.2.0 a claim holds until it's released, the task closes, or someone reclaims it — humans, or with `--force` the orchestrator that launched the worker. The holder's events on its task are its signs of life (`last_seen_ms`, derived like `blocked`). A reclaim names the hold it takes back, so it can't clobber a newer claim. Timed leases from 0.1.x ledgers still expire.
 
 ### E. Storage as shipped (§10B, first slice)
 Single `.hippotask/ledger.jsonl`. Writers: exclusive `flock` (10 s timeout → `io` error, never a hang) → read → decide → one `write_all` → `fsync` (rolled back to the previous length if either fails; a newly created file's directory is flushed too). Readers: shared lock. A torn last line is skipped with a warning and fenced off before the next append. Not yet: `snapshot.json`, compaction, other adapters.

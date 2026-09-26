@@ -15,9 +15,13 @@
 //! - **Idempotent.** An event that changes nothing is still in the ledger
 //!   (audit) but doesn't bump `seq`/`updated_ms`; it's listed in
 //!   [`Projection::noops`] so the history can say "(no change)" / "(rejected)".
-//! - **Lease.** Granted only on an open task whose lease is free, expired, or
-//!   already held by the same worker (actor + node). A rejected attempt is a no-op.
-//! - **Closed tasks hold no lease.** Entering done/cancelled clears it.
+//! - **Holds.** A claim (0.2.0: no timer) or a lease (0.1.x: timed) is granted
+//!   only on an open task whose hold is free, expired, or already this worker's
+//!   (actor + node). A rejected attempt is a no-op. A reclaim takes back only
+//!   the hold it names (ADR-003).
+//! - **Signs of life.** Any event the holder writes on its task refreshes the
+//!   hold's `last_seen_ms` — derived, like `blocked`, so it's never a "change".
+//! - **Closed tasks hold nothing.** Entering done/cancelled clears the hold.
 //! - **Blocked is derived**, never stored: a task is blocked while any task it
 //!   is blocked-by is still open.
 //!
@@ -119,6 +123,14 @@ pub fn fold<'a>(events: impl IntoIterator<Item = &'a Event>) -> Projection {
                 out.noops.insert(ev.eid.clone());
             }
         }
+        // A sign of life (ADR-003): any event the holder writes on its task —
+        // applied or not — says when it was last seen. It's derived, like
+        // `blocked`, so it never counts as a change.
+        if let Some(l) = task.lease.as_mut() {
+            if l.is_held_by(&ev.actor, &ev.node) {
+                l.last_seen_ms = ev.ts;
+            }
+        }
     }
 
     derive_blocked(&mut out.tasks);
@@ -164,21 +176,17 @@ fn apply(t: &mut Task, ev: &Event) -> Effect {
             changed(t.relations.len() != before)
         }
 
-        // --- Lease: the swarm-coordination rule.
-        EventKind::Lease { holder, expires_ms } => {
-            let free = match &t.lease {
-                None => true,
-                Some(l) => !l.is_active(ev.ts) || l.is_held_by(holder, &ev.node),
-            };
-            if t.state.is_closed() || !free {
-                return Effect::None; // rejected — the attempt stays in the ledger
+        // --- Holds: the swarm-coordination rule. A claim is a lease with no timer.
+        EventKind::Lease { holder, expires_ms } => grant(t, ev, holder, Some(*expires_ms)),
+        EventKind::Claim { holder } => grant(t, ev, holder, None),
+        // Take back only the hold this names: if that worker already let go —
+        // and someone newer may hold the task by now — it changes nothing.
+        EventKind::Reclaim { holder, node, .. } => {
+            let named = t.lease.as_ref().is_some_and(|l| l.is_held_by(holder, node));
+            if named {
+                t.lease = None;
             }
-            let lease = Lease {
-                holder: holder.clone(),
-                node: ev.node.clone(),
-                expires_ms: *expires_ms,
-            };
-            changed(set(&mut t.lease, Some(lease)))
+            changed(named)
         }
         // You can only give back a lease *you* (this actor on this node) hold.
         EventKind::Release => {
@@ -200,6 +208,37 @@ fn apply(t: &mut Task, ev: &Event) -> Effect {
         // --- A note is activity, not a content change.
         EventKind::Note { .. } => Effect::Activity,
     }
+}
+
+/// Grant a hold — a timed lease (`expires_ms: Some`) or a claim (`None`) — if
+/// the task is open and its current hold is free, expired, or this worker's own.
+///
+/// Rust note: `Option::is_none_or` reads "no hold, or a hold that…" — a
+/// one-line way to say "free" without a `match`.
+fn grant(t: &mut Task, ev: &Event, holder: &str, expires_ms: Option<i64>) -> Effect {
+    let current = t.lease.as_ref();
+    let mine = current.is_some_and(|l| l.is_held_by(holder, &ev.node));
+    let free = current.is_none_or(|l| !l.is_active(ev.ts)) || mine;
+    if t.state.is_closed() || !free {
+        return Effect::None; // rejected — the attempt stays in the ledger
+    }
+    let unbroken = mine && current.is_some_and(|l| l.is_active(ev.ts));
+    if unbroken && current.is_some_and(|l| l.expires_ms == expires_ms) {
+        return Effect::None; // already held on exactly these terms
+    }
+    // Same worker, no gap: the hold keeps its start. Anyone else starts afresh.
+    let since_ms = match current {
+        Some(l) if unbroken => l.since_ms,
+        _ => ev.ts,
+    };
+    t.lease = Some(Lease {
+        holder: holder.to_string(),
+        node: ev.node.clone(),
+        expires_ms,
+        since_ms,
+        last_seen_ms: ev.ts,
+    });
+    Effect::Changed
 }
 
 /// Last-writer-wins assignment that reports whether anything changed.
@@ -290,6 +329,23 @@ mod tests {
             task: on.into(),
         };
         ev(eid, task, ts, HUMAN, kind)
+    }
+
+    fn claim(eid: &str, task: &str, ts: i64, who: (&str, &str)) -> Event {
+        let kind = EventKind::Claim {
+            holder: who.0.into(),
+        };
+        ev(eid, task, ts, who, kind)
+    }
+
+    /// `by` takes back the claim held by `from`.
+    fn reclaim(eid: &str, task: &str, ts: i64, by: (&str, &str), from: (&str, &str)) -> Event {
+        let kind = EventKind::Reclaim {
+            holder: from.0.into(),
+            node: from.1.into(),
+            reason: None,
+        };
+        ev(eid, task, ts, by, kind)
     }
 
     fn task<'a>(p: &'a Projection, id: &str) -> &'a Task {
@@ -560,7 +616,7 @@ mod tests {
         ]);
         let l = task(&p, "T1").lease.as_ref().expect("leased");
         assert!(l.is_held_by("agent:a", "na"));
-        assert_eq!(l.expires_ms, 1_000);
+        assert_eq!(l.expires_ms, Some(1_000));
         assert!(
             p.noops.contains("e3"),
             "B's attempt is recorded but rejected"
@@ -590,7 +646,7 @@ mod tests {
         ]);
         assert_eq!(
             task(&p, "T1").lease.as_ref().expect("leased").expires_ms,
-            500
+            Some(500)
         );
     }
 
@@ -668,6 +724,122 @@ mod tests {
         assert!(p.noops.contains("e3"));
     }
 
+    // ---- claims: holds without a timer (ADR-003) ----
+
+    #[test]
+    fn a_claim_never_expires_and_keeps_others_out() {
+        let far_future = 10_i64.pow(12);
+        let p = fold(&[
+            create("e1", "T1", 1),
+            claim("e2", "T1", 10, A),
+            lease("e3", "T1", far_future, B, far_future + 1_000),
+            claim("e4", "T1", far_future + 1, B),
+        ]);
+        let l = task(&p, "T1").lease.as_ref().expect("claimed");
+        assert!(l.is_held_by("agent:a", "na"));
+        assert_eq!(l.expires_ms, None);
+        assert!(l.is_active(i64::MAX));
+        assert!(
+            p.noops.contains("e3") && p.noops.contains("e4"),
+            "b is refused, however late"
+        );
+    }
+
+    #[test]
+    fn claiming_again_changes_nothing() {
+        let p = fold(&[
+            create("e1", "T1", 1),
+            claim("e2", "T1", 10, A),
+            claim("e3", "T1", 20, A),
+        ]);
+        assert!(p.noops.contains("e3"));
+        assert_eq!(task(&p, "T1").lease.as_ref().expect("claimed").since_ms, 10);
+        assert_eq!(task(&p, "T1").seq, 2, "create + the first claim");
+    }
+
+    #[test]
+    fn a_claim_takes_over_an_expired_legacy_lease() {
+        // 0.1.x ledgers hold timed leases; they still expire as they always did.
+        let p = fold(&[
+            create("e1", "T1", 1),
+            lease("e2", "T1", 10, A, 100),
+            claim("e3", "T1", 200, B),
+        ]);
+        let l = task(&p, "T1").lease.as_ref().expect("claimed");
+        assert!(l.is_held_by("agent:b", "nb"));
+        assert_eq!((l.expires_ms, l.since_ms), (None, 200));
+    }
+
+    #[test]
+    fn a_legacy_holder_who_claims_keeps_an_unbroken_hold() {
+        let p = fold(&[
+            create("e1", "T1", 1),
+            lease("e2", "T1", 10, A, 1_000),
+            claim("e3", "T1", 50, A),
+        ]);
+        let l = task(&p, "T1").lease.as_ref().expect("claimed");
+        assert_eq!(l.expires_ms, None, "the lease became a claim");
+        assert_eq!(l.since_ms, 10, "held without a break since the lease");
+    }
+
+    #[test]
+    fn a_reclaim_takes_back_only_the_claim_it_names() {
+        let p = fold(&[
+            create("e1", "T1", 1),
+            claim("e2", "T1", 10, A),
+            reclaim("e3", "T1", 20, HUMAN, B), // b holds nothing here
+            reclaim("e4", "T1", 30, HUMAN, A),
+            reclaim("e5", "T1", 40, HUMAN, A), // already taken back
+        ]);
+        assert!(task(&p, "T1").lease.is_none());
+        let expected: BTreeSet<String> = ["e3".to_string(), "e5".to_string()].into();
+        assert_eq!(p.noops, expected);
+    }
+
+    #[test]
+    fn a_reclaim_cannot_clobber_a_newer_claim() {
+        // A reclaim racing a release: by the time it lands, b holds the task.
+        let p = fold(&[
+            create("e1", "T1", 1),
+            claim("e2", "T1", 10, A),
+            ev("e3", "T1", 20, A, EventKind::Release),
+            claim("e4", "T1", 30, B),
+            reclaim("e5", "T1", 40, HUMAN, A),
+        ]);
+        let l = task(&p, "T1").lease.as_ref().expect("claimed");
+        assert!(l.is_held_by("agent:b", "nb"));
+        assert!(p.noops.contains("e5"));
+    }
+
+    #[test]
+    fn closing_a_task_clears_its_claim() {
+        let p = fold(&[
+            create("e1", "T1", 1),
+            claim("e2", "T1", 10, A),
+            state("e3", "T1", 20, State::Cancelled),
+            claim("e4", "T1", 30, B),
+        ]);
+        assert!(task(&p, "T1").lease.is_none());
+        assert!(p.noops.contains("e4"), "a closed task can't be claimed");
+    }
+
+    #[test]
+    fn the_holders_events_on_its_task_are_its_signs_of_life() {
+        let note =
+            |eid: &str, ts, who| ev(eid, "T1", ts, who, EventKind::Note { text: "n".into() });
+        let p = fold(&[
+            create("e1", "T1", 1),
+            claim("e2", "T1", 10, A),
+            note("e3", 50, A),
+            note("e4", 70, B),        // someone else's note says nothing about a
+            claim("e5", "T1", 80, B), // nor does b's refused claim
+            claim("e6", "T1", 90, A), // a no-op, but a is clearly still there
+        ]);
+        let l = task(&p, "T1").lease.as_ref().expect("claimed");
+        assert_eq!((l.since_ms, l.last_seen_ms), (10, 90));
+        assert!(p.noops.contains("e6"), "being seen is not a change");
+    }
+
     // ---- derived blocked ----
 
     #[test]
@@ -743,7 +915,7 @@ mod tests {
             .map(|i| {
                 let ts = rng.below(40) as i64; // lots of same-ms collisions on purpose
                 let who = *rng.pick(&workers);
-                let kind = match rng.below(15) {
+                let kind = match rng.below(17) {
                     0 | 1 => EventKind::Create {
                         title: format!("t{i}"),
                         priority: *rng.pick(&prios),
@@ -785,6 +957,17 @@ mod tests {
                     },
                     12 => EventKind::Release,
                     13 => EventKind::Complete,
+                    14 => EventKind::Claim {
+                        holder: who.0.to_string(),
+                    },
+                    15 => {
+                        let from = *rng.pick(&workers);
+                        EventKind::Reclaim {
+                            holder: from.0.to_string(),
+                            node: from.1.to_string(),
+                            reason: None,
+                        }
+                    }
                     _ => EventKind::Note { text: "n".into() },
                 };
                 let task = *rng.pick(&tasks); // explicit: Rust 1.89 infers `&[str]` otherwise
@@ -814,6 +997,13 @@ mod tests {
             }
             assert!(t.seq >= 1, "seed {seed}");
             assert!(t.updated_ms >= t.created_ms, "seed {seed}");
+            if let Some(l) = &t.lease {
+                assert!(
+                    l.since_ms <= l.last_seen_ms,
+                    "seed {seed}: {}'s holder was last seen before its hold began",
+                    t.id
+                );
+            }
             let should_block = t.relations.iter().any(|r| {
                 r.rel == RelType::BlockedBy && r.task != t.id && open.contains(r.task.as_str())
             });

@@ -101,10 +101,10 @@ def seed():
     t1 = add("Ship auth", "--priority", "urgent", "--label", "backend",
              "--body", "Users get a 401 after ~1h — suspect a token-refresh race.")
     t2 = add("Write docs", "--priority", "high")
-    add("Polish landing", "--priority", "med")
+    t3 = add("Polish landing", "--priority", "med")
     run_cli(["start", t1], "agent:claude", "cc")
     run_cli(["note", t1, "repro'd with two tabs; looking at the refresh lock"], "agent:claude", "cc")
-    run_cli(["lease", t2], "agent:codex", "cx")
+    run_cli(["start", t3], "agent:codex", "cx")
     run_cli(["update", t2, "--block", t1])
 
 

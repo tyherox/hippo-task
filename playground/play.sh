@@ -6,8 +6,8 @@
 #   ./playground/play.sh                # uses playground/play-data as a scratch store
 #   ./playground/play.sh /path/to/repo  # drive the .hippotask/ ledger in a real repo instead
 #
-# At the prompt, type any real CLI command (add / list / show / update / lease /
-# start / release / note / desc / done) OR a playground helper:
+# At the prompt, type any real CLI command (add / list / show / update / start /
+# release / reclaim / note / desc / done) OR a playground helper:
 #   who · seed · ledger · hist <id> · help · q
 
 set -o pipefail
@@ -29,6 +29,7 @@ colorize(){
   sed -E \
     -e "s/(\[blocked\])/${RED}\1${RST}/g" \
     -e "s/(lease:[^ ]+)/${MAG}\1${RST}/g" \
+    -e "s/(held:[^ ]+)/${MAG}\1${RST}/g" \
     -e "s/ doing / ${BLU}doing${RST} /g" \
     -e "s/ done / ${DIM}done${RST} /g" \
     -e "s/ urgent / ${RED}urgent${RST} /g" \
@@ -44,17 +45,17 @@ board(){
   if [ -z "$out" ]; then printf "  ${DIM}(no tasks yet)${RST}\n"; else printf '%s\n' "$out" | colorize; fi
   printf '%s\n' "────────────────────────────────────────────────────────────"
   [ -n "$LASTMSG" ] && printf "› %s\n" "$LASTMSG"
-  printf "${DIM}cli: add list show update lease start release note desc done   helpers: who · seed · ledger · hist <id> · help · q${RST}\n"
+  printf "${DIM}cli: add list show update start release reclaim note desc done   helpers: who · seed · ledger · hist <id> · help · q${RST}\n"
 }
 
 seed(){
   rm -rf "$DATADIR"; mkdir -p "$DATADIR"
-  local t1 t2
+  local t1 t2 t3
   t1="$(HIPPO_ACTOR=human:you HIPPO_NODE=n0 "$BIN" --dir "$DATADIR" add "Ship auth"  --priority urgent --label backend | awk '{print $2}')"
   t2="$(HIPPO_ACTOR=human:you HIPPO_NODE=n0 "$BIN" --dir "$DATADIR" add "Write docs" --priority high | awk '{print $2}')"
-  HIPPO_ACTOR=human:you    HIPPO_NODE=n0 "$BIN" --dir "$DATADIR" add "Polish landing" --priority med >/dev/null
+  t3="$(HIPPO_ACTOR=human:you HIPPO_NODE=n0 "$BIN" --dir "$DATADIR" add "Polish landing" --priority med | awk '{print $2}')"
   HIPPO_ACTOR=agent:claude HIPPO_NODE=cc "$BIN" --dir "$DATADIR" start "$t1" >/dev/null
-  HIPPO_ACTOR=agent:codex  HIPPO_NODE=cx "$BIN" --dir "$DATADIR" lease "$t2" >/dev/null
+  HIPPO_ACTOR=agent:codex  HIPPO_NODE=cx "$BIN" --dir "$DATADIR" start "$t3" >/dev/null
   HIPPO_ACTOR=human:you    HIPPO_NODE=n0 "$BIN" --dir "$DATADIR" update "$t2" --block "$t1" >/dev/null
   LASTMSG="seeded. Ship auth is claude's. Try:  who agent:codex cx  →  start ${t1#\#}   (you'll be told to back off)"
 }
@@ -67,12 +68,13 @@ helptext(){
     start 1               (id = the number on the board; '#1' works here too)
     update 1 --state doing --label-add urgent --block 2
     note 1 "left off at the token refresh"
-    done 1                (refused if another worker holds the lease; --force overrides)
+    done 1                (refused if another worker holds it; --force overrides)
+    reclaim 1             (as a person: take back a stuck worker's task)
 
   Playground helpers:
     who                   switch identity (actor + node) — the multi-agent test
     who <actor> <node>
-    seed                  load a demo backlog with a live lease conflict
+    seed                  load a demo backlog with a live claim conflict
     ledger                show the raw append-only event ledger
     hist <id>             show one task's full history
     q                     quit

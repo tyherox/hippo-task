@@ -68,7 +68,7 @@ fn golden_path_two_agents_one_task() {
     let events = one["events"].as_array().expect("events array");
     let rejected: Vec<&Value> = events
         .iter()
-        .filter(|e| e["type"] == "lease" && e["applied"] == false)
+        .filter(|e| e["type"] == "claim" && e["applied"] == false)
         .collect();
     assert_eq!(rejected.len(), 1, "{events:#?}");
     assert_eq!(rejected[0]["actor"], "agent:codex");
@@ -101,14 +101,14 @@ fn labels_given_to_add_are_never_lost() {
 }
 
 #[test]
-fn a_lease_taken_right_after_create_is_not_dropped() {
-    // Same bug, across processes: a lease stamped in the create's millisecond
+fn a_claim_taken_right_after_create_is_not_dropped() {
+    // Same bug, across processes: a claim stamped in the create's millisecond
     // by a node that sorts first used to vanish.
     let dir = TempDir::new("cli-fast-lease");
     for i in 1..=20 {
         let n = i.to_string();
         ok(dir.path(), ("human:h", "zz"), &["add", "x"]);
-        ok(dir.path(), ("agent:a", "aa"), &["lease", &n]);
+        ok(dir.path(), ("agent:a", "aa"), &["start", &n]);
         let t = ok(dir.path(), HUMAN, &["show", &n, "--json"]).json();
         assert_eq!(t["lease"]["holder"], "agent:a", "task {n}: {t}");
     }
@@ -189,11 +189,11 @@ fn exit_codes_are_the_contract() {
     assert_eq!(code(&["add", "  "]), 2, "empty title");
     assert_eq!(code(&["update", "1"]), 2, "nothing to update");
     assert_eq!(code(&["update", "1", "--block", "1"]), 2, "self-block");
-    assert_eq!(code(&["lease", "1", "--minutes", "0"]), 2);
+    assert_eq!(code(&["lease", "1"]), 2, "retired in 0.2.0 (ADR-003)");
     assert_eq!(
-        code(&["lease", "1", "--minutes", "9223372036854775807"]),
+        code(&["start", "1", "--minutes", "9223372036854775807"]),
         2,
-        "used to overflow and panic"
+        "claims have no timer to set"
     );
     assert_eq!(code(&["show", "ab"]), 2, "too short to be an id");
     assert_eq!(code(&["list", "--sort", "sideways"]), 2);
@@ -206,8 +206,8 @@ fn exit_codes_are_the_contract() {
         "used to create a dangling relation"
     );
     // 4 — conflict
-    ok(d, CLAUDE, &["lease", "1"]);
-    assert_eq!(tasks(d, CODEX, &["lease", "1"]).code, 4);
+    ok(d, CLAUDE, &["start", "1"]);
+    assert_eq!(tasks(d, CODEX, &["start", "1"]).code, 4);
     // 2 — usage, too: --dir must name an existing directory (1 = io is tested below)
     let a_file = d.join("a-file");
     std::fs::write(&a_file, "not a directory").unwrap();
@@ -358,7 +358,7 @@ fn concurrent_writers_lose_nothing_and_stay_in_time_order() {
 }
 
 #[test]
-fn a_lease_race_has_exactly_one_winner_and_it_is_the_real_holder() {
+fn a_claim_race_has_exactly_one_winner_and_it_is_the_real_holder() {
     let dir = TempDir::new("cli-race");
     for round in 1..=6 {
         let id = round.to_string();
@@ -366,7 +366,7 @@ fn a_lease_race_has_exactly_one_winner_and_it_is_the_real_holder() {
         let racers: Vec<(String, Child)> = (0..10)
             .map(|r| {
                 let actor = format!("agent:r{r}");
-                let child = cmd(dir.path(), (&actor, &format!("node{r}")), &["lease", &id])
+                let child = cmd(dir.path(), (&actor, &format!("node{r}")), &["start", &id])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .spawn()
@@ -424,8 +424,11 @@ fn no_personal_data_is_recorded_by_default() {
     run(&["note", "1", "progress"]);
     run(&["desc", "1", "new description"]);
     run(&["release", "1"]);
-    run(&["lease", "2"]);
+    run(&["start", "2"]);
     run(&["done", "2"]);
+    run(&["start", "1"]);
+    run(&["release", "--all"]);
+    run(&["reclaim", "1"]);
     run(&["list"]);
     run(&["list", "--json"]);
     run(&["show", "1"]);
@@ -490,7 +493,7 @@ fn text_output_is_for_humans_and_says_what_happened() {
         "doing",
         "urgent",
         "Ship auth",
-        "lease:agent:claude@cc(10m)",
+        "held:agent:claude@cc",
         "backend",
     ] {
         assert!(line.contains(needle), "list lacks {needle:?}: {line}");
@@ -504,9 +507,10 @@ fn text_output_is_for_humans_and_says_what_happened() {
 // ---------------------------------------------------------------- JSON contract
 
 #[test]
-fn json_shapes_are_frozen_within_0_1_x() {
-    // AGENTS.md promises that within 0.1.x, --json fields are only ever added:
+fn json_shapes_are_frozen_within_a_minor_version() {
+    // AGENTS.md promises that within 0.2.x, --json fields are only ever added:
     // removing or renaming one must fail here; adding one is a deliberate edit of this list.
+    // (0.2.0 added `since_ms` and `last_seen_ms` to the lease object — ADR-003.)
     const TASK: [&str; 14] = [
         "id",
         "num",
@@ -523,7 +527,14 @@ fn json_shapes_are_frozen_within_0_1_x() {
         "updated_ms",
         "seq",
     ];
-    const LEASE: [&str; 4] = ["holder", "node", "expires_ms", "active"];
+    const LEASE: [&str; 6] = [
+        "holder",
+        "node",
+        "expires_ms",
+        "active",
+        "since_ms",
+        "last_seen_ms",
+    ];
     const EVENT: [&str; 8] = [
         "eid", "task", "ts", "actor", "node", "type", "data", "applied",
     ];
@@ -535,8 +546,8 @@ fn json_shapes_are_frozen_within_0_1_x() {
     let started = ok(d, CLAUDE, &["start", "1", "--json"]).stdout;
     assert_eq!(keys_in_order(&started, ""), TASK);
     assert_eq!(keys_in_order(&started, "\"lease\":"), LEASE);
-    let leased = ok(d, CLAUDE, &["lease", "1", "--json"]).stdout;
-    assert_eq!(keys_in_order(&leased, "\"lease\":"), LEASE);
+    let held = ok(d, HUMAN, &["list", "--held", "--json"]).stdout;
+    assert_eq!(keys_in_order(&held, "\"lease\":"), LEASE);
     let released = ok(d, CLAUDE, &["release", "1", "--json"]).stdout;
     let mut release_keys = TASK.to_vec();
     release_keys.push("released");
@@ -552,6 +563,13 @@ fn json_shapes_are_frozen_within_0_1_x() {
         TASK,
         "list is an array of task objects"
     );
+    // The multi-task commands print arrays of task objects, too.
+    ok(d, CLAUDE, &["start", "1"]);
+    let released_all = ok(d, CLAUDE, &["release", "--all", "--json"]).stdout;
+    assert_eq!(keys_in_order(&released_all, ""), TASK);
+    ok(d, CODEX, &["start", "1"]);
+    let reclaimed = ok(d, HUMAN, &["reclaim", "1", "--json"]).stdout;
+    assert_eq!(keys_in_order(&reclaimed, ""), TASK);
 }
 
 /// The keys of the first JSON object after `marker`, in printed order.
@@ -646,6 +664,49 @@ fn list_ready_is_the_pick_query_and_release_hands_work_back() {
     let released = ok(d, CLAUDE, &["release", "1"]).stdout;
     assert!(released.contains("back to todo"), "{released}");
     assert_eq!(ready(CODEX), [1, 2], "released work is ready again");
+}
+
+#[test]
+fn claims_have_no_timer_and_whoever_knows_hands_work_back() {
+    // ADR-003, end to end.
+    let dir = TempDir::new("cli-claims");
+    let d = dir.path();
+    for title in ["a", "b", "c"] {
+        ok(d, HUMAN, &["add", title]);
+    }
+    let started = ok(d, CLAUDE, &["start", "1", "--json"]).json();
+    assert_eq!(started["lease"]["expires_ms"], Value::Null, "no timer");
+    assert_eq!(started["lease"]["active"], true);
+    assert!(started["lease"]["since_ms"].is_i64() && started["lease"]["last_seen_ms"].is_i64());
+
+    let retired = tasks(d, CLAUDE, &["lease", "1"]);
+    assert_eq!(retired.code, 2, "{retired:#?}");
+    assert!(
+        retired.stderr.contains("retired") && retired.stderr.contains("start"),
+        "the error says what to do instead: {retired:#?}"
+    );
+
+    ok(d, CLAUDE, &["start", "2"]);
+    let held = ok(d, HUMAN, &["list", "--held"]).stdout;
+    assert!(held.contains("held:agent:claude@cc"), "{held}");
+    let all = ok(d, CLAUDE, &["release", "--all"]).stdout;
+    assert!(
+        all.contains("released #1") && all.contains("released #2"),
+        "{all}"
+    );
+    assert!(ok(d, HUMAN, &["list", "--held"]).stdout.trim().is_empty());
+
+    // A worker that can't hand its task back: a person reclaims it; an agent needs --force.
+    ok(d, CODEX, &["start", "3"]);
+    assert_eq!(tasks(d, CLAUDE, &["reclaim", "3"]).code, 4);
+    let back = ok(d, HUMAN, &["reclaim", "3", "--reason", "window closed"]).stdout;
+    assert!(back.contains("reclaimed #3 from agent:codex@cx"), "{back}");
+    let shown = ok(d, HUMAN, &["show", "3"]).stdout;
+    assert!(
+        shown.contains("window closed"),
+        "the reason is on the record: {shown}"
+    );
+    ok(d, CLAUDE, &["start", "3"]);
 }
 
 // ---------------------------------------------------------------- closed tasks

@@ -14,14 +14,11 @@
 
 use crate::error::{Error, Result};
 use crate::fold::{self, Projection};
-use crate::model::{Event, EventKind, Priority, RelType, State, Task};
-use crate::render::{remaining, who};
+use crate::model::{Event, EventKind, Lease, Priority, RelType, State, Task};
+use crate::render::{hold_status, who};
 use crate::store::{Store, Tx};
 use std::collections::BTreeMap;
 use ulid::Ulid;
-
-/// Longest lease you can take in one go (renew to hold it longer).
-pub const MAX_LEASE_MINUTES: i64 = 24 * 60;
 
 /// Shortest id suffix accepted, so a stray `hippo-task done A` can't hit a random task.
 const MIN_SUFFIX: usize = 4;
@@ -31,7 +28,7 @@ const MIN_SUFFIX: usize = 4;
 pub struct Ctx {
     /// Semantic who: `human:local`, `agent:claude`, …
     pub actor: String,
-    /// Which writer instance (window / session). A lease belongs to actor + node.
+    /// Which writer instance (window / session). A claim belongs to actor + node.
     pub node: String,
     /// Wall-clock "now" in unix millis.
     pub now_ms: i64,
@@ -42,9 +39,9 @@ impl Ctx {
     /// ledger records `human:local` — never `$USER`, a hostname, or anything else
     /// taken from the machine. (Guarded by a test in tests/cli.rs.)
     ///
-    /// Agents must name their node: a lease belongs to actor + node, so if every
+    /// Agents must name their node: a claim belongs to actor + node, so if every
     /// window of `agent:claude` defaulted to the same node they'd be one worker,
-    /// and the lease would no longer stop two windows taking the same task.
+    /// and the claim would no longer stop two windows taking the same task.
     pub fn new(actor: Option<String>, node: Option<String>, now_ms: i64) -> Result<Ctx> {
         let actor = actor.unwrap_or_else(|| "human:local".to_string());
         if node.is_none() && actor.trim().starts_with("agent:") {
@@ -72,16 +69,6 @@ impl Ctx {
     /// An event stamped inside the transaction (monotonic timestamp).
     fn event(&self, tx: &mut Tx, task: &str, kind: EventKind) -> Event {
         let ts = tx.next_ts(self.now_ms);
-        self.event_at(ts, task, kind)
-    }
-
-    /// A lease event; expiry counts from the event's own timestamp.
-    fn lease_event(&self, tx: &mut Tx, task: &str, minutes: i64) -> Event {
-        let ts = tx.next_ts(self.now_ms);
-        let kind = EventKind::Lease {
-            holder: self.actor.clone(),
-            expires_ms: ts.saturating_add(minutes.saturating_mul(60_000)),
-        };
         self.event_at(ts, task, kind)
     }
 
@@ -254,31 +241,22 @@ pub fn update(store: &Store, ctx: &Ctx, id: &str, changes: Changes) -> Result<Ta
     task_in(fold::fold(&ledger.events), &task.id)
 }
 
-// ------------------------------------------------------- lease / start
+// ------------------------------------------------------ start / release
 
-/// Take (or renew) the execution lease. `Err(Conflict)` if another worker
-/// holds it or the task is closed — the attempt is still recorded (contention
-/// is part of the audit trail).
-pub fn lease(store: &Store, ctx: &Ctx, id: &str, minutes: i64) -> Result<Task> {
-    let minutes = lease_minutes(minutes)?;
+/// Claim a task and set it to doing, in one transaction. The claim has no
+/// timer (ADR-003): it's yours until you finish or release it, or someone
+/// reclaims it. `Err(Conflict)` if another worker holds it or the task is
+/// closed — and then only the (rejected) attempt is recorded, because
+/// contention is part of the audit trail.
+pub fn start(store: &Store, ctx: &Ctx, id: &str) -> Result<Task> {
     let mut tx = store.begin()?;
     let task_id = resolve(&fold::fold(tx.events()).tasks, id)?.id.clone();
-    let attempt = ctx.lease_event(&mut tx, &task_id, minutes);
-    let ledger = tx.commit(vec![attempt])?;
-    let after = task_in(fold::fold(&ledger.events), &task_id)?;
-    holds(&after, ctx)?;
-    Ok(after)
-}
+    let claim = EventKind::Claim {
+        holder: ctx.actor.clone(),
+    };
+    let attempt = ctx.event(&mut tx, &task_id, claim);
 
-/// Lease + set state to doing, in one transaction. If the lease is refused,
-/// only the (rejected) attempt is recorded and the state is left alone.
-pub fn start(store: &Store, ctx: &Ctx, id: &str, minutes: i64) -> Result<Task> {
-    let minutes = lease_minutes(minutes)?;
-    let mut tx = store.begin()?;
-    let task_id = resolve(&fold::fold(tx.events()).tasks, id)?.id.clone();
-    let attempt = ctx.lease_event(&mut tx, &task_id, minutes);
-
-    // Would the lease be granted? Ask the fold itself — one source of truth.
+    // Would the claim be granted? Ask the fold itself — one source of truth.
     let preview = task_in(fold::fold(tx.events().iter().chain([&attempt])), &task_id)?;
     if let Err(conflict) = holds(&preview, ctx) {
         tx.commit(vec![attempt])?;
@@ -331,6 +309,126 @@ pub fn release(store: &Store, ctx: &Ctx, id: &str) -> Result<Released> {
     let ledger = tx.commit(events)?;
     let task = task_in(fold::fold(&ledger.events), &task_id)?;
     Ok(Released { task, released })
+}
+
+/// Give back everything this worker (actor + node) holds, in one transaction —
+/// for a session-end hook or a workflow's teardown (ADR-003). Each `doing` task
+/// goes back to `todo`, as with [`release`]. Returns the tasks given back.
+pub fn release_all(store: &Store, ctx: &Ctx) -> Result<Vec<Task>> {
+    let mut tx = store.begin()?;
+    let mut held: Vec<Task> = fold::fold(tx.events())
+        .tasks
+        .into_values()
+        .filter(|t| {
+            t.lease
+                .as_ref()
+                .is_some_and(|l| l.is_held_by(&ctx.actor, &ctx.node))
+        })
+        .collect();
+    if held.is_empty() {
+        return Ok(held); // nothing to record — dropping `tx` releases the lock
+    }
+    held.sort_by_key(|t| t.num);
+    let mut events = Vec::new();
+    for t in &held {
+        // As in `release`: reset the state while still holding it, then let go.
+        if t.state == State::Doing {
+            let todo = EventKind::SetState { state: State::Todo };
+            events.push(ctx.event(&mut tx, &t.id, todo));
+        }
+        events.push(ctx.event(&mut tx, &t.id, EventKind::Release));
+    }
+    let ledger = tx.commit(events)?;
+    tasks_in(fold::fold(&ledger.events), &held)
+}
+
+/// What [`reclaim`] takes back.
+#[derive(Debug, Clone)]
+pub enum ReclaimTarget {
+    /// One task, from whoever holds it.
+    Task(String),
+    /// Everything held on one node — a worker's window or session.
+    Node(String),
+}
+
+/// What [`reclaim`] took back: the task as it is now, and whose hold it was.
+#[derive(Debug, Clone)]
+pub struct Reclaimed {
+    pub task: Task,
+    pub from: Lease,
+}
+
+/// Take back work from a worker that can't give it back itself (ADR-003): a
+/// person, or the orchestrator that launched it, knows it's gone. Each
+/// `reclaim` event names the hold it takes back, so a stale one can't clobber
+/// a newer claim, and each `doing` task goes back to `todo`.
+///
+/// Etiquette: human actors may reclaim; an agent needs `force`, which
+/// AGENTS.md reserves for the process that launched the worker. Returns what
+/// was taken back — nothing if nobody held it, which isn't an error.
+pub fn reclaim(
+    store: &Store,
+    ctx: &Ctx,
+    target: &ReclaimTarget,
+    reason: Option<&str>,
+    force: bool,
+) -> Result<Vec<Reclaimed>> {
+    let reason = optional("reason", reason)?;
+    if !force && !ctx.actor.starts_with("human:") {
+        return Err(Error::Conflict(
+            "agents need --force to reclaim — AGENTS.md reserves it for the process that launched the worker (an orchestrator)".into(),
+        ));
+    }
+    let mut tx = store.begin()?;
+    let proj = fold::fold(tx.events());
+    // Each held task, paired with the hold it has now.
+    let mut held: Vec<(Task, Lease)> = match target {
+        ReclaimTarget::Task(id) => {
+            let t = resolve(&proj.tasks, id)?;
+            match &t.lease {
+                Some(l) => vec![(t.clone(), l.clone())],
+                None => Vec::new(),
+            }
+        }
+        ReclaimTarget::Node(node) => proj
+            .tasks
+            .into_values()
+            .filter(|t| t.lease.as_ref().is_some_and(|l| l.node == *node))
+            .filter_map(|t| {
+                let l = t.lease.clone()?;
+                Some((t, l))
+            })
+            .collect(),
+    };
+    if held.is_empty() {
+        return Ok(Vec::new()); // nobody held it — nothing to record
+    }
+    held.sort_by_key(|(t, _)| t.num);
+    let mut events = Vec::new();
+    for (t, l) in &held {
+        let take_back = EventKind::Reclaim {
+            holder: l.holder.clone(),
+            node: l.node.clone(),
+            reason: reason.clone(),
+        };
+        events.push(ctx.event(&mut tx, &t.id, take_back));
+        // With the hold gone, the state is anyone's to change: back to the queue.
+        if t.state == State::Doing {
+            let todo = EventKind::SetState { state: State::Todo };
+            events.push(ctx.event(&mut tx, &t.id, todo));
+        }
+    }
+    let ledger = tx.commit(events)?;
+    let mut after = fold::fold(&ledger.events);
+    held.into_iter()
+        .map(|(t, from)| {
+            let task = after
+                .tasks
+                .remove(&t.id)
+                .ok_or_else(|| Error::NotFound(t.id.clone()))?;
+            Ok(Reclaimed { task, from })
+        })
+        .collect()
 }
 
 // --------------------------------------------------------- done / note
@@ -390,8 +488,11 @@ pub struct Filter {
     pub mine: bool,
     pub blocked: bool,
     /// Only tasks someone could pick up right now: open, not blocked, and no
-    /// active lease (so this includes abandoned `doing` work — ADR-002).
+    /// active hold (so this includes `doing` work whose 0.1.x lease ran out — ADR-002).
     pub ready: bool,
+    /// Only tasks someone holds right now; each hold says when its holder was
+    /// last seen (ADR-003).
+    pub held: bool,
     pub sort: Sort,
 }
 
@@ -410,6 +511,7 @@ pub fn list(store: &Store, ctx: &Ctx, filter: &Filter) -> Result<Vec<Task>> {
         })
         .filter(|t| !filter.blocked || t.blocked)
         .filter(|t| !filter.ready || is_ready(t, ctx.now_ms))
+        .filter(|t| !filter.held || t.lease.as_ref().is_some_and(|l| l.is_active(ctx.now_ms)))
         .collect();
     match filter.sort {
         Sort::Num => tasks.sort_by_key(|t| t.num),
@@ -422,9 +524,9 @@ pub fn list(store: &Store, ctx: &Ctx, filter: &Filter) -> Result<Vec<Task>> {
     Ok(tasks)
 }
 
-/// Ready to pick up: open, not blocked, and nobody holds an active lease.
-/// That includes `doing` work whose holder crashed: its lease ran out, but the
-/// fold can't move it back to `todo`, because time passing isn't an event.
+/// Ready to pick up: open, not blocked, and nobody holds it. That includes
+/// `doing` work whose 0.1.x lease ran out: the fold can't move it back to
+/// `todo`, because time passing isn't an event. (A claim never runs out.)
 fn is_ready(t: &Task, now_ms: i64) -> bool {
     let held = t.lease.as_ref().is_some_and(|l| l.is_active(now_ms));
     !t.state.is_closed() && !t.blocked && !held
@@ -535,46 +637,37 @@ fn guard_holder(task: &Task, ctx: &Ctx, force: bool, action: &str) -> Result<()>
     match &task.lease {
         Some(l) if !force && l.is_active(ctx.now_ms) && !l.is_held_by(&ctx.actor, &ctx.node) => {
             Err(Error::Conflict(format!(
-                "{} is leased to {} ({}) — only the holder can {action}; wait for it to finish or expire, or pass --force",
+                "{} is held by {} ({}) — only the holder can {action}; wait for it to finish, reclaim it (hippo-task reclaim {}), or pass --force",
                 task.handle(),
                 who(&l.holder, &l.node),
-                remaining(l.expires_ms, ctx.now_ms)
+                hold_status(l, ctx.now_ms),
+                task.num
             )))
         }
         _ => Ok(()),
     }
 }
 
-/// After a lease attempt: do *we* (this actor on this node) hold it?
+/// After a claim attempt: do *we* (this actor on this node) hold it?
 fn holds(task: &Task, ctx: &Ctx) -> Result<()> {
     match &task.lease {
         Some(l) if l.is_held_by(&ctx.actor, &ctx.node) => Ok(()),
         Some(l) => Err(Error::Conflict(format!(
-            "{} is leased to {} ({}) — back off and pick another task",
+            "{} is held by {} ({}) — back off and pick another task",
             task.handle(),
             who(&l.holder, &l.node),
-            remaining(l.expires_ms, ctx.now_ms)
+            hold_status(l, ctx.now_ms)
         ))),
         None if task.state.is_closed() => Err(Error::Conflict(format!(
-            "{} is {} — it can't be leased; reopen it first: hippo-task update {} --state todo",
+            "{} is {} — it can't be claimed; reopen it first: hippo-task update {} --state todo",
             task.handle(),
             task.state,
             task.num
         ))),
         None => Err(Error::Conflict(format!(
-            "{}: the lease was not granted",
+            "{}: the claim was not granted",
             task.handle()
         ))),
-    }
-}
-
-fn lease_minutes(minutes: i64) -> Result<i64> {
-    if (1..=MAX_LEASE_MINUTES).contains(&minutes) {
-        Ok(minutes)
-    } else {
-        Err(Error::Usage(format!(
-            "--minutes must be between 1 and {MAX_LEASE_MINUTES} (renew to hold a task longer)"
-        )))
     }
 }
 
@@ -598,4 +691,16 @@ fn task_in(mut proj: Projection, id: &str) -> Result<Task> {
     proj.tasks
         .remove(id)
         .ok_or_else(|| Error::NotFound(id.to_string()))
+}
+
+/// The current state of each of `tasks`, in the same order.
+fn tasks_in(mut proj: Projection, tasks: &[Task]) -> Result<Vec<Task>> {
+    tasks
+        .iter()
+        .map(|t| {
+            proj.tasks
+                .remove(&t.id)
+                .ok_or_else(|| Error::NotFound(t.id.clone()))
+        })
+        .collect()
 }

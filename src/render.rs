@@ -38,13 +38,17 @@ pub struct TaskView<'a> {
     pub seq: u64,
 }
 
-/// A lease as JSON, with `active` evaluated at render time.
+/// A hold as JSON, with `active` evaluated at render time. `expires_ms` is
+/// `null` for a claim (0.2.0 — no timer) and a unix-millis instant for a
+/// 0.1.x lease. (The field keeps the name `lease` so agents' parsers don't break.)
 #[derive(Debug, Serialize)]
 pub struct LeaseView<'a> {
     pub holder: &'a str,
     pub node: &'a str,
-    pub expires_ms: i64,
+    pub expires_ms: Option<i64>,
     pub active: bool,
+    pub since_ms: i64,
+    pub last_seen_ms: i64,
 }
 
 impl<'a> TaskView<'a> {
@@ -65,6 +69,8 @@ impl<'a> TaskView<'a> {
                 node: &l.node,
                 expires_ms: l.expires_ms,
                 active: l.is_active(now_ms),
+                since_ms: l.since_ms,
+                last_seen_ms: l.last_seen_ms,
             }),
             created_ms: t.created_ms,
             updated_ms: t.updated_ms,
@@ -176,10 +182,41 @@ fn short_remaining(expires_ms: i64, now_ms: i64) -> Option<String> {
     }
 }
 
-/// Compact lease badge for `list`: `lease:agent:claude@cc(9m)` or `…(expired)`.
+/// How a hold stands, for messages: a claim's quiet time (`quiet 12m`, or
+/// `just seen`), or a 0.1.x lease's time left (`9m left`, `expired`).
+pub fn hold_status(l: &Lease, now_ms: i64) -> String {
+    match l.expires_ms {
+        None => ago(l.last_seen_ms, now_ms)
+            .map_or_else(|| "just seen".to_string(), |quiet| format!("quiet {quiet}")),
+        Some(expires_ms) => remaining(expires_ms, now_ms),
+    }
+}
+
+/// How long ago `then_ms` was, coarsely — `12m`, `3h`, `2d` — or `None` under a minute.
+fn ago(then_ms: i64, now_ms: i64) -> Option<String> {
+    match now_ms.saturating_sub(then_ms) / 60_000 {
+        m if m < 1 => None,
+        m if m < 60 => Some(format!("{m}m")),
+        m if m < 48 * 60 => Some(format!("{}h", m / 60)),
+        m => Some(format!("{}d", m / (24 * 60))),
+    }
+}
+
+/// Compact hold badge for `list`: a claim is `held:agent:claude@cc`, plus
+/// `(quiet 12m)` once its holder has been quiet a while; a 0.1.x lease is
+/// `lease:agent:claude@cc(9m)` or `…(expired)`.
 pub fn lease_badge(l: &Lease, now_ms: i64) -> String {
-    let left = short_remaining(l.expires_ms, now_ms).unwrap_or_else(|| "expired".to_string());
-    format!("lease:{}({left})", who(&l.holder, &l.node))
+    let worker = who(&l.holder, &l.node);
+    match l.expires_ms {
+        None => match ago(l.last_seen_ms, now_ms) {
+            Some(quiet) => format!("held:{worker}(quiet {quiet})"),
+            None => format!("held:{worker}"),
+        },
+        Some(expires_ms) => {
+            let left = short_remaining(expires_ms, now_ms).unwrap_or_else(|| "expired".to_string());
+            format!("lease:{worker}({left})")
+        }
+    }
 }
 
 /// One `list` line: `#3    doing     high   Ship auth [blocked] lease:…  backend,api`.
@@ -222,13 +259,20 @@ pub fn detail_text(d: &Detail, now_ms: i64) -> String {
         rows.push(("assignee", a.clone()));
     }
     if let Some(l) = &t.lease {
-        let lease = format!(
-            "{} — {} (until {})",
-            who(&l.holder, &l.node),
-            remaining(l.expires_ms, now_ms),
-            time(l.expires_ms)
-        );
-        rows.push(("lease", lease));
+        let worker = who(&l.holder, &l.node);
+        let hold = match l.expires_ms {
+            None => format!(
+                "{worker} — claimed {}, {}",
+                time(l.since_ms),
+                hold_status(l, now_ms)
+            ),
+            Some(expires_ms) => format!(
+                "{worker} — {} (until {})",
+                remaining(expires_ms, now_ms),
+                time(expires_ms)
+            ),
+        };
+        rows.push(("held", hold));
     }
     if !t.labels.is_empty() {
         rows.push(("labels", join(&t.labels, ", ")));
@@ -279,12 +323,22 @@ fn history_line(entry: &Entry, all: &BTreeMap<String, Task>) -> String {
                 (expires_ms.saturating_sub(ev.ts) + 59_999) / 60_000
             )
         }
+        EventKind::Claim { .. } => String::new(),
+        EventKind::Reclaim {
+            holder,
+            node,
+            reason,
+        } => match reason {
+            Some(why) => format!("from {} — \"{why}\"", who(holder, node)),
+            None => format!("from {}", who(holder, node)),
+        },
         EventKind::Note { text } => format!("\"{text}\""),
         EventKind::Release | EventKind::Complete => String::new(),
     };
     let effect = match (&ev.kind, entry.applied) {
         (_, true) => "",
-        (EventKind::Lease { .. }, false) => "  (rejected)",
+        (EventKind::Lease { .. } | EventKind::Claim { .. }, false) => "  (rejected)",
+        (EventKind::Reclaim { .. }, false) => "  (they no longer held it — no effect)",
         (EventKind::Release, false) => "  (not the holder — no effect)",
         (_, false) => "  (no change)",
     };

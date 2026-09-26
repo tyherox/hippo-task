@@ -131,11 +131,15 @@
   const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
   const short=id=>id&&id.length>6?id.slice(-6):id;
   const closed=s=>s==="done"||s==="cancelled";
-  // Live: the CLI's own verdict (`lease.active`, decided when it ran). Sim: the browser clock.
-  const active=l=>!!l&&(MODE==="live"?l.active===true:l.expires_ms>Date.now());
+  // Live: the CLI's own verdict (`lease.active`, decided when it ran). Sim: a claim (no timer) always
+  // holds; a 0.1.x lease holds until the browser clock passes it.
+  const active=l=>!!l&&(MODE==="live"?l.active===true:(l.expires_ms==null||l.expires_ms>Date.now()));
   const heldBy=(l,w)=>!!l&&l.holder===w.actor&&l.node===w.node;
-  const remTxt=l=>{const ms=l.expires_ms-Date.now();if(ms<=0)return"expired";return ms<6e4?Math.ceil(ms/1e3)+"s left":Math.ceil(ms/6e4)+"m left";};
-  const leaseRem=l=>"("+remTxt(l).replace(" left","")+")";
+  // render.rs ago(): 12m / 3h / 2d — null under a minute.
+  const ago=ms=>ms<6e4?null:ms<36e5?Math.floor(ms/6e4)+"m":ms<1728e5?Math.floor(ms/36e5)+"h":Math.floor(ms/864e5)+"d";
+  // render.rs hold_status(): a claim's quiet time, or a 0.1.x lease's time left.
+  const remTxt=l=>{if(l.expires_ms==null){const q=ago(Date.now()-(l.last_seen_ms??Date.now()));return q?"quiet "+q:"just seen";}const ms=l.expires_ms-Date.now();if(ms<=0)return"expired";return ms<6e4?Math.ceil(ms/1e3)+"s left":Math.ceil(ms/6e4)+"m left";};
+  const leaseRem=l=>{const r=remTxt(l);return r==="just seen"?"":"("+r.replace(" left","")+")";};
   const genId=()=>(Date.now().toString(32)+Math.random().toString(32).slice(2)+"0".repeat(26)).toUpperCase().slice(0,26);
   const eidGen=()=>String(Date.now()).padStart(15,"0")+"-"+String(SEQ++).padStart(6,"0");
   function toast(m,w){const t=document.createElement("div");t.className="tmsg"+(w?" warn":"");t.textContent=m;$("#toast").appendChild(t);setTimeout(()=>t.remove(),3500);}
@@ -162,12 +166,20 @@
         case"label-remove":if(t.labels.delete(d.label))fx="changed";break;
         case"relate":if(!t.relations.some(r=>r.rel===d.rel&&r.task===d.task)){t.relations.push({rel:d.rel,task:d.task});fx="changed";}break;
         case"unrelate":{const n=t.relations.length;t.relations=t.relations.filter(r=>!(r.rel===d.rel&&r.task===d.task));if(t.relations.length!==n)fx="changed";break;}
-        case"lease":{const l=t.lease,free=!l||l.expires_ms<=e.ts||(l.holder===d.holder&&l.node===e.node);if(!closed(t.state)&&free&&set("lease",{holder:d.holder,node:e.node,expires_ms:d.expires_ms}))fx="changed";break;}
+        case"lease":case"claim":{ // fold.rs grant(): a claim is a lease with no timer (ADR-003)
+          const l=t.lease,exp=e.type==="lease"?d.expires_ms:null,mine=!!l&&l.holder===d.holder&&l.node===e.node,
+            live=!!l&&(l.expires_ms==null||l.expires_ms>e.ts),free=!l||!live||mine;
+          if(closed(t.state)||!free)break;
+          if(mine&&live&&l.expires_ms===exp)break; // already held on these terms
+          t.lease={holder:d.holder,node:e.node,expires_ms:exp,since_ms:mine&&live?l.since_ms:e.ts,last_seen_ms:e.ts};fx="changed";break;}
+        case"reclaim":if(t.lease&&t.lease.holder===d.holder&&t.lease.node===d.node){t.lease=null;fx="changed";}break;
         case"release":if(t.lease&&t.lease.holder===e.actor&&t.lease.node===e.node){t.lease=null;fx="changed";}break;
         case"complete":{const c=set("state","done");let cl=false;if(t.lease){t.lease=null;cl=true;}if(c||cl)fx="changed";break;}
         case"note":fx="activity";break;
       }
       if(fx==="changed"){t.updated=e.ts;t.seq++;}else if(fx==="activity")t.updated=e.ts;else noops.add(e.eid);
+      // A sign of life (ADR-003): any event the holder writes on its task, applied or not.
+      if(t.lease&&t.lease.holder===e.actor&&t.lease.node===e.node)t.lease.last_seen_ms=e.ts;
     }
     const open=new Set(Object.values(T).filter(x=>!closed(x.state)).map(x=>x.id));
     for(const x of Object.values(T))x.blocked=x.relations.some(r=>r.rel==="blocked-by"&&r.task!==x.id&&open.has(r.task));
@@ -182,7 +194,7 @@
   const PRIO={none:["--gray-bg","--gray-tx"],low:["--blue-bg","--blue-tx"],med:["--amber-bg","--amber-tx"],high:["--amber-bg","--amber-tx"],urgent:["--red-bg","--red-tx"]};
   const pill=(t,b,x)=>`<span class="pill" style="background:var(${b});color:var(${x})">${esc(t)}</span>`;
   const ref=(T,id)=>T[id]?`#${T[id].num} ${esc(T[id].title)} <span class="sid">(${T[id].state})</span>`:`<span class="sid">${esc(short(id))} (unknown)</span>`;
-  const mark=h=>h.applied?"":(h.e.type==="lease"?" · (rejected)":h.e.type==="release"?" · (not the holder — no effect)":" · (no change)");
+  const mark=h=>h.applied?"":(h.e.type==="lease"||h.e.type==="claim"?" · (rejected)":h.e.type==="reclaim"?" · (they no longer held it — no effect)":h.e.type==="release"?" · (not the holder — no effect)":" · (no change)");
 
   function render(){
     const F=current(),T=F.T,cols={todo:[],doing:[],done:[]};
@@ -202,10 +214,10 @@
     return`<div class="card ${t.id===sel?"sel":""}" data-id="${esc(t.id)}"><div class="t">${esc(t.title)}</div>${t.body?`<div class="sid" style="margin:-2px 0 5px;color:var(--muted)">${esc(t.body.slice(0,80))}${t.body.length>80?"…":""}</div>`:""}<div class="row"><span class="sid">#${t.num}</span>${t.state==="cancelled"?pill("cancelled","--gray-bg","--gray-tx"):""}${t.priority!=="none"?pill(t.priority,b,x):""}${t.blocked?pill("blocked","--red-bg","--red-tx"):""}${l?pill("● "+l.holder.replace("agent:","")+"@"+l.node+leaseRem(l),active(l)?"--purple-bg":"--gray-bg",active(l)?"--purple-tx":"--gray-tx"):""}${[...t.labels].map(v=>pill(v,"--gray-bg","--gray-tx")).join("")}${nc?pill(nc+(nc>1?" notes":" note"),"--gray-bg","--gray-tx"):""}</div></div>`;}
   function inspector(t,F){const T=F.T,others=Object.values(T).filter(x=>x.id!==t.id&&!closed(x.state)),hist=historyFor(t.id,F);return`<h3>${esc(t.title)}</h3>
     <div class="kv">handle <b>#${t.num}</b> · <span class="sid">${esc(short(t.id))}</span></div><div class="kv">state <b>${t.state}${t.blocked?" (blocked)":""}</b></div><div class="kv">priority <b>${t.priority}</b></div>
-    ${t.lease?`<div class="kv">lease <b>${esc(t.lease.holder)}@${esc(t.lease.node)}</b> · ${remTxt(t.lease)}</div>`:""}
+    ${t.lease?`<div class="kv">held by <b>${esc(t.lease.holder)}@${esc(t.lease.node)}</b> · ${remTxt(t.lease)}</div>`:""}
     ${t.labels.size?`<div class="kv">labels <b>${[...t.labels].map(esc).join(", ")}</b></div>`:""}
     ${t.relations.map(r=>`<div class="kv">${esc(r.rel)} <b>${ref(T,r.task)}</b></div>`).join("")}
-    <div class="acts"><button class="mini" data-a="lease">lease</button><button class="mini" data-a="start">start</button><button class="mini" data-a="release">release</button><button class="mini" data-a="done">done</button></div>
+    <div class="acts"><button class="mini" data-a="start">start</button><button class="mini" data-a="release">release</button><button class="mini" data-a="reclaim">reclaim</button><button class="mini" data-a="done">done</button></div>
     <div class="acts"><select id="iPrio">${["none","low","med","high","urgent"].map(p=>`<option ${p===t.priority?"selected":""}>${p}</option>`).join("")}</select><button class="mini" data-a="prio">priority</button></div>
     <div class="acts"><input id="iLabel" placeholder="label" style="width:92px"><button class="mini" data-a="label">+ label</button></div>
     <div class="acts"><select id="iBlock"><option value="">blocked by…</option>${others.map(o=>`<option value="${esc(o.id)}">#${o.num} · ${esc(o.title)}</option>`).join("")}</select><button class="mini" data-a="block">block</button></div>
@@ -215,9 +227,9 @@
     <div class="sec"><div class="seclbl">notes</div>
       ${(()=>{const ns=hist.filter(h=>h.e.type==="note");return ns.length?ns.map(({e})=>`<div class="note"><span class="ag ${agC(e.actor)}">${esc(e.actor.replace("agent:",""))}</span> ${esc(e.data&&e.data.text||"")} <span class="sid">${new Date(e.ts).toLocaleTimeString()}</span></div>`).join(""):`<div class="empty">no notes yet</div>`;})()}
       <div class="acts" style="margin-top:6px"><input id="iNote" placeholder="add a note…" style="flex:1"><button class="mini" data-a="note">add note</button></div></div>
-    <div class="sec"><div class="seclbl">history</div><div class="hist">${hist.map(h=>`<div${h.applied?"":' style="opacity:.6"'}>${new Date(h.e.ts).toLocaleTimeString()} · ${esc(h.e.type)} · ${esc(h.e.actor)}@${esc(h.e.node)}${h.e.type==="note"&&h.e.data&&h.e.data.text?` · "${esc(h.e.data.text)}"`:""}${mark(h)}</div>`).join("")}</div></div>`;}
+    <div class="sec"><div class="seclbl">history</div><div class="hist">${hist.map(h=>`<div${h.applied?"":' style="opacity:.6"'}>${new Date(h.e.ts).toLocaleTimeString()} · ${esc(h.e.type)} · ${esc(h.e.actor)}@${esc(h.e.node)}${h.e.type==="note"&&h.e.data&&h.e.data.text?` · "${esc(h.e.data.text)}"`:""}${h.e.type==="reclaim"&&h.e.data?` · from ${esc(h.e.data.holder)}@${esc(h.e.data.node)}${h.e.data.reason?` — "${esc(h.e.data.reason)}"`:""}`:""}${mark(h)}</div>`).join("")}</div></div>`;}
   function bindInspector(T){document.querySelectorAll("#inspector [data-a]").forEach(b=>b.onclick=()=>{const t=T[sel];if(!t)return;const a=b.dataset.a;
-    if(a==="lease")return dispatch(["lease",t.id]);
+    if(a==="reclaim")return dispatch(["reclaim",t.id]);
     if(a==="start")return dispatch(["start",t.id]);
     if(a==="release")return dispatch(["release",t.id]);
     if(a==="done")return dispatch(["done",t.id]);
@@ -243,7 +255,7 @@
   }
   function simRun(argv){
     const{T}=fold(events),cmd=argv[0],rest=argv.slice(1),flags={},pos=[];
-    const BOOL=new Set(["force","unassign","mine","blocked","json"]);
+    const BOOL=new Set(["force","unassign","mine","blocked","ready","held","all","json"]);
     for(let i=0;i<rest.length;i++){const a=rest[i];if(a.startsWith("--")){const k=a.slice(2);if(BOOL.has(k))flags[k]=[true];else(flags[k]=flags[k]||[]).push(rest[++i]);}else pos.push(a);}
     const one=k=>flags[k]&&flags[k][0],has=k=>!!flags[k];
     const err=(code,msg)=>({stdout:"",stderr:"error: "+msg,code}),ok=out=>({stdout:out,stderr:"",code:0});
@@ -255,22 +267,35 @@
       const bad=blankLabel("label")||blank("body","description")||blank("assignee","assignee");if(bad)return bad;
       const id=genId();pushEv(id,"create",{title,priority:one("priority")||"none",body:has("body")?String(one("body")).trim():null,assignee:has("assignee")?String(one("assignee")).trim():null});(flags.label||[]).forEach(v=>pushEv(id,"label-add",{label:String(v).trim()}));sel=id;return ok("added #"+fold(events).T[id].num+" "+id);}
     if(cmd==="list")return ok("");
+    if(cmd==="lease")return err(2,"`lease` was retired in 0.2.0: claims have no timer to take or renew. Claim a task with `hippo-task start <id>` — it's yours until you finish or release it, or someone reclaims it (ADR-003)");
+    if(cmd==="release"&&has("all")){ // ops.rs release_all()
+      const mine=Object.values(T).filter(x=>heldBy(x.lease,who)).sort((a,b)=>a.num-b.num);
+      if(!mine.length)return ok("you hold nothing — nothing to release");
+      return ok(mine.map(x=>{if(x.state==="doing")pushEv(x.id,"set-state",{state:"todo"});pushEv(x.id,"release");return`released #${x.num} — back to todo`;}).join("\n"));
+    }
+    // ops.rs reclaim(): people may; an agent needs --force. Each event names the hold it takes back.
+    const takeBack=held=>held.sort((a,b)=>a.num-b.num).map(x=>{const l=x.lease;pushEv(x.id,"reclaim",{holder:l.holder,node:l.node,reason:has("reason")?String(one("reason")).trim():null});if(x.state==="doing")pushEv(x.id,"set-state",{state:"todo"});return`reclaimed #${x.num} from ${l.holder}@${l.node} — back to todo`;});
+    if(cmd==="reclaim"){
+      const bad=blank("reason","reason");if(bad)return bad;
+      if(!has("force")&&!me.actor.startsWith("human:"))return err(4,"agents need --force to reclaim — AGENTS.md reserves it for the process that launched the worker (an orchestrator)");
+      if(has("from")){const node=String(one("from")),held=Object.values(T).filter(x=>x.lease&&x.lease.node===node);return ok(held.length?takeBack(held).join("\n"):`nothing is held on ${node} — nothing to reclaim`);}
+    }
     if(pos[0]===undefined)return err(2,"missing task id");
     const r=resolveQ(T,pos[0]);if(r.err)return{stdout:"",...r.err};const t=r.t;
     if(cmd==="show"){sel=t.id;return ok("");}
-    const guard=action=>{const l=t.lease;return!has("force")&&active(l)&&!heldBy(l,who)?err(4,`#${t.num} is leased to ${l.holder}@${l.node} (${remTxt(l)}) — only the holder can ${action}; wait for it to finish or expire, or pass --force`):null;};
-    const verdict=a=>heldBy(a.lease,who)?null:a.lease?err(4,`#${a.num} is leased to ${a.lease.holder}@${a.lease.node} (${remTxt(a.lease)}) — back off and pick another task`):closed(a.state)?err(4,`#${a.num} is ${a.state} — it can't be leased; reopen it first: hippo-task update ${a.num} --state todo`):err(4,`#${a.num}: the lease was not granted`);
-    if(cmd==="lease"||cmd==="start"){
-      const m=+(one("minutes")||10);if(!(m>=1&&m<=1440))return err(2,"--minutes must be between 1 and 1440 (renew to hold a task longer)");
-      const ts=stampTs();pushEvAt(ts,t.id,"lease",{holder:me.actor,expires_ms:ts+m*6e4});
+    if(cmd==="reclaim")return ok(t.lease?takeBack([t]).join("\n"):`task ${pos[0]} isn't held by anyone — nothing to reclaim`);
+    const guard=action=>{const l=t.lease;return!has("force")&&active(l)&&!heldBy(l,who)?err(4,`#${t.num} is held by ${l.holder}@${l.node} (${remTxt(l)}) — only the holder can ${action}; wait for it to finish, reclaim it (hippo-task reclaim ${t.num}), or pass --force`):null;};
+    const verdict=a=>heldBy(a.lease,who)?null:a.lease?err(4,`#${a.num} is held by ${a.lease.holder}@${a.lease.node} (${remTxt(a.lease)}) — back off and pick another task`):closed(a.state)?err(4,`#${a.num} is ${a.state} — it can't be claimed; reopen it first: hippo-task update ${a.num} --state todo`):err(4,`#${a.num}: the claim was not granted`);
+    if(cmd==="start"){ // ops.rs start(): a claim — no timer (ADR-003) — then doing
+      if(has("minutes"))return err(2,"unexpected argument '--minutes' found");
+      pushEv(t.id,"claim",{holder:me.actor});
       const a=fold(events).T[t.id],v=verdict(a);if(v)return v;
-      if(cmd==="lease")return ok(`leased #${a.num} to ${W} — ${remTxt(a.lease)}`);
-      pushEv(t.id,"set-state",{state:"doing"});return ok(`started #${a.num} — leased to ${W} (${remTxt(a.lease)}), state doing`);
+      pushEv(t.id,"set-state",{state:"doing"});return ok(`started #${a.num} — claimed by ${W}, state doing`);
     }
     if(cmd==="done"){const g=guard("close it");if(g)return g;pushEv(t.id,"complete");return ok("done #"+t.num);}
     if(cmd==="note"||cmd==="desc"){const text=pos.slice(1).join(" ").trim();if(!text)return err(2,(cmd==="note"?"note":"description")+" must not be empty");
       if(cmd==="note"){pushEv(t.id,"note",{text});return ok("noted on #"+t.num);}pushEv(t.id,"set-body",{body:text});return ok("described #"+t.num);}
-    if(cmd==="release"){const held=heldBy(t.lease,who),back=held&&t.state==="doing";if(back)pushEv(t.id,"set-state",{state:"todo"});pushEv(t.id,"release");return ok(held?`released #${t.num} — back to todo`:`#${t.num}: not leased by you — nothing to release`);}
+    if(cmd==="release"){const held=heldBy(t.lease,who),back=held&&t.state==="doing";if(back)pushEv(t.id,"set-state",{state:"todo"});pushEv(t.id,"release");return ok(held?`released #${t.num} — back to todo`:`#${t.num}: not held by you — nothing to release`);}
     if(cmd==="update"){
       const keys=["title","state","priority","assignee","unassign","body","label-add","label-remove","block","unblock"];
       if(!keys.some(has))return err(2,"nothing to update — pass at least one change (see `hippo-task update --help`)");
@@ -330,8 +355,8 @@
       me={actor:"human:you",node:"n0"};const t1=genId(),t2=genId(),t3=genId();
       pushEv(t1,"create",{title:"Ship auth",priority:"urgent",body:"Users get a 401 after ~1h — suspect a token-refresh race.",assignee:null});pushEv(t1,"label-add",{label:"backend"});
       pushEv(t2,"create",{title:"Write docs",priority:"high",body:null,assignee:null});pushEv(t3,"create",{title:"Polish landing",priority:"med",body:null,assignee:null});
-      me={actor:"agent:claude",node:"cc"};let ts=stampTs();pushEvAt(ts,t1,"lease",{holder:"agent:claude",expires_ms:ts+6e5});pushEv(t1,"set-state",{state:"doing"});pushEv(t1,"note",{text:"repro'd with two tabs; looking at the refresh lock"});
-      me={actor:"agent:codex",node:"cx"};ts=stampTs();pushEvAt(ts,t2,"lease",{holder:"agent:codex",expires_ms:ts+6e5});
+      me={actor:"agent:claude",node:"cc"};pushEv(t1,"claim",{holder:"agent:claude"});pushEv(t1,"set-state",{state:"doing"});pushEv(t1,"note",{text:"repro'd with two tabs; looking at the refresh lock"});
+      me={actor:"agent:codex",node:"cx"};pushEv(t3,"claim",{holder:"agent:codex"});pushEv(t3,"set-state",{state:"doing"});
       me={actor:"human:you",node:"n0"};pushEv(t2,"relate",{rel:"blocked-by",task:t1});me=s;render();
     }
     toast("seeded — switch identity and try starting Ship auth");
@@ -364,6 +389,7 @@
       if(q<0.4){argv=["done",t.id];desc="completed #"+t.num;}
       else if(q<0.65){argv=["update",t.id,"--label-add",pick(LABELS)];desc="labeled #"+t.num;}
       else if(q<0.8&&open.length>1){const o=pick(open.filter(x=>x.id!==t.id));argv=["update",t.id,"--block",o.id];desc="blocked #"+t.num+" on #"+o.num;}
+      else if(q<0.88){argv=["release",t.id];desc="handed back #"+t.num;}
       else{argv=["note",t.id,pick(NOTES)];desc="noted on #"+t.num;}}
     else if(free.length&&r<0.85){const t=pick(free);argv=["start",t.id];desc="started #"+t.num;}
     else if(taken.length){const t=pick(taken);argv=["start",t.id];desc="tried #"+t.num;}
@@ -375,7 +401,10 @@
   async function apLoop(){if(!apRunning)return;await apAction();if(apRunning)apTimer=setTimeout(apLoop,1150-(+$("#apSpeed").value)*100);}
   $("#apRun").onclick=()=>{apRunning=!apRunning;$("#apRun").textContent=apRunning?"⏸ pause":"▶ run";$("#apRun").classList.toggle("on",apRunning);if(apRunning)apLoop();else clearTimeout(apTimer);};
   $("#apStep").onclick=()=>apAction();
-  $("#apAgents").oninput=e=>{apN=+e.target.value;$("#apN").textContent=apN;};
+  // ADR-003: an agent that stops keeps its claims — whoever knows (here, you) hands its work back.
+  $("#apAgents").oninput=async e=>{const n=+e.target.value,gone=AGENTS.slice(n,apN);apN=n;$("#apN").textContent=apN;
+    for(const a of gone){const res=await dispatch(["reclaim","--from",a.node,"--reason","agent stopped"],{actor:"human:you",node:"n0"});
+      if(res.code===0&&res.stdout&&!res.stdout.startsWith("nothing"))feed(a,"stopped — you reclaimed its work","good");}};
 
   (async function init(){
     try{const r=await fetch("/state");if(r.ok){MODE="live";await refresh();}else MODE="sim";}

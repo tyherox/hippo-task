@@ -2,11 +2,11 @@
 
 > **Hippocampus for modern work** — shared, auditable task memory for humans and coding agents.
 
-`hippo-task` keeps a project's tasks in one append-only file in your repo (`.hippotask/ledger.jsonl`), folded into a task list. Several agents — or several chat windows of the same agent — can work from it without stepping on each other: they claim work with expiring **leases**, and every action, including refused claims, stays in an auditable history.
+`hippo-task` keeps a project's tasks in one append-only file in your repo (`.hippotask/ledger.jsonl`), folded into a task list. Several agents — or several chat windows of the same agent — can work from it without stepping on each other: they **claim** work — a claim has no timer: it's theirs until they finish or release it, or a person or orchestrator reclaims it — and every action, including refused claims, stays in an auditable history.
 
 It's the reference implementation of the open agent-native task schema (`docs/schema-design.md`).
 
-**Status: 0.1.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
+**Status: 0.2.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
 
 *History:* HippoTask started as a TypeScript prototype of a universal interop schema with platform adapters — preserved at git tag `v0-typescript`, with its research (the 10-platform schema study, provider scorecards) in `docs/archive/typescript-v0/`. This Rust core narrows the first release to local, multi-agent task memory; platform adapters come back once sync is earned.
 
@@ -26,18 +26,20 @@ hippo-task add "Write the RFC" --priority high --label docs --body "Scope: the v
 hippo-task list                                  # every task, by number
 hippo-task list --state todo --sort priority     # also: --mine, --blocked, --sort created|updated
 hippo-task list --ready --sort priority          # what can be picked up now: open, unblocked, not held
+hippo-task list --held                           # who holds what, and how long each has been quiet
 hippo-task show 3                                # one task + its full history
 hippo-task update 3 --priority urgent --label-add api --block 2
 hippo-task update 3 --unblock 2 --unassign
-hippo-task lease 3 --minutes 30                  # claim it for 30 min (1–1440; default 10) — renew the same way
-hippo-task start 3                               # claim + set doing, in one step
+hippo-task start 3                               # claim it + set doing — no timer: yours until done or released
 hippo-task note 3 "left off at the token refresh"
 hippo-task desc 3 "One paragraph describing the task"
 hippo-task release 3                             # hand it back unfinished: back to todo, free for the next worker
+hippo-task release --all                         # on exit: give back everything this worker holds
+hippo-task reclaim 3 --reason "window closed"    # a person takes back a stuck worker's task (--from <node>: all of it)
 hippo-task done 3                                # complete (and release)
 ```
 
-Every command accepts `--json` (see `AGENTS.md` for the shapes). `release --json` also reports `released`: whether you actually held the lease.
+Every command accepts `--json` (see `AGENTS.md` for the shapes). `release --json` also reports `released`: whether you actually held the task. `release --all` and `reclaim` print an array of the tasks they handed back.
 
 **Task ids:** the number (`3`, shown as `#3`), the full ULID, or 4+ trailing characters of it. In a shell, don't type `#3` unquoted — `#` starts a comment; type `3`.
 
@@ -45,11 +47,11 @@ Every command accepts `--json` (see `AGENTS.md` for the shapes). `release --json
 
 - `HIPPO_ACTOR` / `--actor` — *who*: `agent:claude`, `human:ana`. Default: `human:local`.
 - `HIPPO_NODE` / `--node` — *which window or session*. Default: `local`.
-- **A lease belongs to actor + node.** Give every concurrent worker its own node, and two windows of the same agent can't both claim one task. Agents (`agent:…` actors) *must* set a node — without one, every command exits 2 and says how:
+- **A claim belongs to actor + node.** Give every concurrent worker its own node, and two windows of the same agent can't both claim one task. Agents (`agent:…` actors) *must* set a node — without one, every command exits 2 and says how:
 
 ```bash
 HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 hippo-task start 3    # → started #3
-HIPPO_ACTOR=agent:claude HIPPO_NODE=win-2 hippo-task start 3    # → exit 4: leased to agent:claude@win-1 — back off
+HIPPO_ACTOR=agent:claude HIPPO_NODE=win-2 hippo-task start 3    # → exit 4: held by agent:claude@win-1 — back off
 ```
 
 ## Exit codes
@@ -60,15 +62,15 @@ HIPPO_ACTOR=agent:claude HIPPO_NODE=win-2 hippo-task start 3    # → exit 4: le
 | 1 | `io` | the ledger couldn't be read, written, or locked |
 | 2 | `usage` | invalid input: bad value, ambiguous or too-short id, nothing to do, `--dir` doesn't exist |
 | 3 | `not_found` | no task matches the id |
-| 4 | `conflict` | leased by another worker — or, for `lease` / `start` only, the task is closed |
+| 4 | `conflict` | held by another worker — or, for `start`, the task is closed; or an agent reclaiming without `--force` |
 
 Errors go to stderr as `error: …` (a JSON line with `--json`); results go to stdout.
 
 ## The rules it enforces
 
-- **Leases:** granted if the task is open and the lease is free, expired, or already yours — otherwise exit 4, and the refused attempt is kept in the history as `(rejected)`.
-- **Unfinished work goes back in the queue:** `release` by the holder returns a started task to `todo`. A crashed agent's task stays `doing` until someone picks it up, but `list --ready` shows it once its lease runs out.
-- **State belongs to the lease holder:** while a lease is active, only its holder can change the task's state — including completing or cancelling it. Everyone can still edit title, priority, labels, notes. `--force` overrides (for a human cleaning up after a crashed agent); it doesn't take over the lease — a forced state change leaves it in place until it expires or the task closes. Closing clears the lease. A closed task can't be leased or started (exit 4) — reopen it with `hippo-task update 3 --state todo`; notes, labels, title, and priority stay editable, and `hippo-task done 3` on a task that's already done is recorded but changes nothing (on a cancelled task it completes it — no refusal).
+- **Claims:** granted if the task is open and nobody else holds it — otherwise exit 4, and the refused attempt is kept in the history as `(rejected)`. A claim has no timer: it holds until its worker finishes or releases it, or someone reclaims it. (Timed leases in ledgers written by 0.1.x still expire as they did.)
+- **Whoever knows hands work back:** `release` by the holder returns a started task to `todo`, and `release --all` gives back everything a worker holds — run it from a session's exit hook or a workflow's cleanup. A worker that can't (it crashed, or its window closed) keeps its claim until a person — or the orchestrator that launched it — runs `reclaim` (agents need `--force`); `list --held` shows who's been quiet. Every reclaim is recorded, with its reason.
+- **State belongs to the holder:** while someone holds a task, only they can change its state — including completing or cancelling it. Everyone can still edit title, priority, labels, notes. `--force` overrides the state for a human; it doesn't take the claim — `reclaim` does. Closing clears the claim. A closed task can't be started (exit 4) — reopen it with `hippo-task update 3 --state todo`; notes, labels, title, and priority stay editable, and `hippo-task done 3` on a task that's already done is recorded but changes nothing (on a cancelled task it completes it — no refusal).
 - **Blocked is derived:** a task is blocked while any task it's blocked by is still open.
 - **Merging, not clobbering:** concurrent label/relation changes all survive; for single fields the last write wins. Repeating a change (adding a label twice) is recorded but changes nothing — shown as `(no change)`.
 
@@ -93,7 +95,7 @@ Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `s
 
 ## Scope
 
-- **In 0.1.0:** single-file ledger; fold to state; ten commands; actor + node identity; leases; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
+- **In 0.2.0:** single-file ledger; fold to state; ten commands; actor + node identity; claims without timers, handed back by release or reclaim; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
 - **Deferred until real use earns them (staging rule):** full Hybrid Logical Clock, per-task hash-chaining, snapshots/compaction, storage adapters, multi-machine sync, a GUI. The schema leaves room for each without a breaking change.
 
 ## Troubleshooting

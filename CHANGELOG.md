@@ -2,27 +2,42 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-26 — internal release
+
+Claims replace timed leases ([ADR-003](docs/decisions/adr-003-claims-without-timers.md)). **This release breaks things — upgrade every tool that shares a ledger together:** 0.1.x skips `claim` and `reclaim` lines with a warning.
+
+### Breaking
+
+- `start` records a **claim, with no timer**: the task is yours until you finish or release it, or someone reclaims it. Timed leases already in a ledger keep expiring as they did.
+- The `lease` command and `--minutes` are retired. `hippo-task lease` now exits 2 with a pointer to `start`; `start --minutes` is an unknown flag (exit 2).
+- In the task JSON's `lease` object, `expires_ms` is `null` for a claim.
 
 ### Added
 
+- `release --all`: give back everything this worker (actor + node) holds — for a session's exit hook or a workflow's cleanup.
+- `reclaim <id>` and `reclaim --from <node>`, with `--reason` and `--force`: a person — or, with `--force`, the orchestrator that launched a worker — takes back tasks a worker can't give back. The history records who took them back, from whom, and why; a reclaim naming a worker that no longer holds the task changes nothing. `release --all` and `reclaim` print arrays of task objects.
+- `list --held`, and `since_ms` / `last_seen_ms` on the `lease` object: who holds what, and when each holder was last seen (any event it writes on its task counts).
+- Event kinds `claim` and `reclaim`; the existing kinds keep their frozen shape.
 - MIT license (`LICENSE`, and `license = "MIT"` in `Cargo.toml`).
-- `list --ready`: the tasks someone could pick up right now — open, not blocked, and no active lease, including `doing` work whose lease ran out. AGENTS.md's pick step uses it ([ADR-002](docs/decisions/adr-002-released-work.md)).
-- `release --json` includes `released`: true if you held the lease and gave it back, false if there was nothing of yours to release. Additive — the task object is unchanged.
+- `list --ready`: the tasks someone could pick up right now — open, not blocked, and held by nobody, including `doing` work whose 0.1.x lease ran out. AGENTS.md's pick step uses it ([ADR-002](docs/decisions/adr-002-released-work.md)).
+- `release --json` includes `released`: true if you held the task and gave it back, false if there was nothing of yours to release. Additive — the task object is unchanged.
 - `make play` — the playground's interactive REPL (`playground/play.sh`) as a Makefile verb.
 - `make doctor` warns when `python3` is missing (`make ui` needs it).
-- Tests: the `--json` shapes (task, lease, event) are frozen by a CLI test, the way the on-disk event already was; closed-task transitions are pinned (`update --state todo` reopens, `done` on a done task is a recorded no-op, `lease`/`start` on a closed task is exit 4, a forced state change leaves the other worker's lease in place).
+- Tests: the `--json` shapes (task, lease, event) are frozen by a CLI test, the way the on-disk event already was; closed-task transitions are pinned (`update --state todo` reopens, `done` on a done task is a recorded no-op, `start` on a closed task is exit 4, a forced state change leaves the other worker's claim in place).
 
 ### Changed
 
 - `release` by the holder returns a started (`doing`) task to `todo`, so unfinished work goes back in the queue instead of sitting in `doing` with nobody on it. The fold and the event format are unchanged, and a release by anyone else still changes nothing ([ADR-002](docs/decisions/adr-002-released-work.md)).
 - Playground scripts (`demo.sh`, `play.sh`, `serve.py`) build with `--locked`, like the Makefile.
 - The playground UI's Live mode reads lease activity from the CLI's `lease.active` instead of the browser clock.
+- Conflict messages say who holds a task and how long they've been quiet — `held by agent:codex@cx (quiet 7m)` — instead of a lease's time left; `list` shows a claim as `held:<worker>`.
 
 ### Fixed
 
+- A person can now free a crashed worker's task (`reclaim`). Before, `--force` only changed the task's state and left the dead worker's lease in place until it expired.
+
 - CI: the test-integrity gate no longer passes vacuously on `workflow_dispatch` (empty base) or on a branch's first push (all-zero base); it falls back to a usable base commit.
-- Docs realigned with the shipped model: README and AGENTS.md say exactly when a closed task is a conflict (`lease` / `start` only), give the lease range (1–1440 minutes, default 10), and describe the lints, the integrity gate, and CI as they are.
+- Docs realigned with the shipped model: README and AGENTS.md say exactly when a closed task is a conflict, and describe the lints, the integrity gate, and CI as they are.
 
 ## [0.1.0] - 2026-09-25 — internal release
 

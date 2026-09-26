@@ -13,17 +13,17 @@ export HIPPO_NODE=claude-win-1        # unique per window/session; required for 
 
 The loop:
 
-1. **Pick.** `hippo-task list --json --ready --sort priority` — every task listed is open, unblocked, and free, including work another agent released or abandoned (its lease ran out). Take the first that fits.
-2. **Claim.** `hippo-task start 3 --json` — exit 0: it's yours (lease + state doing). Exit 4: someone else has it — pick another; don't retry the same task.
-3. **Work, and leave breadcrumbs.** `hippo-task note 3 "what I did / where I stopped"` — the next agent reads these in `hippo-task show 3 --json`.
-4. **Renew** long work before the lease runs out (default 10 minutes; `--minutes` takes 1–1440): `hippo-task lease 3 --minutes 30`.
-5. **Finish** with `hippo-task done 3`. Stopping without finishing? Add a note saying why, then `hippo-task release 3` — it goes back to `todo` for the next agent.
+1. **Pick.** `hippo-task list --json --ready --sort priority` — every task listed is open, unblocked, and free, including work another agent handed back. Take the first that fits.
+2. **Claim.** `hippo-task start 3 --json` — exit 0: it's yours (claimed + state doing) until you finish or release it. There's no timer and nothing to renew. Exit 4: someone else has it — pick another; don't retry the same task.
+3. **Work, and leave breadcrumbs.** `hippo-task note 3 "what I did / where I stopped"` — the next agent reads these in `hippo-task show 3 --json`. Each note is also a sign of life: `list --held` shows how long a holder has been quiet.
+4. **Finish** with `hippo-task done 3`. Stopping without finishing? Add a note saying why, then `hippo-task release 3` — it goes back to `todo` for the next agent.
+5. **On exit,** `hippo-task release --all --json` gives back anything you still hold. Run it from your session's exit hook or your workflow's cleanup: a claim you don't give back stays yours until a person reclaims it.
 
 Rules:
 
 - Always pass `--json`, parse stdout, and branch on the exit code — never scrape the text output.
 - Refer to tasks by number — `3`, not `#3` (in a shell, `#` starts a comment).
-- Don't change the state of (or close) a task someone else holds — the CLI refuses with exit 4. `--force` exists for humans cleaning up after a crashed agent, not for you.
+- Don't change the state of (or close) a task someone else holds — the CLI refuses with exit 4. `--force` and `hippo-task reclaim` are for humans, and for the orchestrator that launched a worker (to take back a failed worker's tasks: `reclaim --from <node> --force`) — not for you.
 - Never edit `.hippotask/ledger.jsonl` by hand: it's append-only and the CLI is its only writer.
 - Never put secrets or personal data in titles, notes, or descriptions — they are stored in cleartext, forever.
 
@@ -35,13 +35,13 @@ Rules:
 | 1 | `io` | the ledger couldn't be read, written, or locked | if the message says "rolled back", retry once; otherwise check `hippo-task show` first. If it persists, tell the human |
 | 2 | `usage` | invalid input (bad value, ambiguous id, nothing to do) | fix the command; don't retry it unchanged |
 | 3 | `not_found` | no task matches the id | re-list; the number may be wrong |
-| 4 | `conflict` | leased by another worker — or, for `lease` and `start` only, the task is closed | pick another task — don't force |
+| 4 | `conflict` | held by another worker — or, for `start`, the task is closed; or an agent reclaiming without `--force` | pick another task — don't force |
 
-Closed tasks (`done` or `cancelled`): only `lease` and `start` refuse them. `hippo-task update 3 --state todo` reopens one; notes, labels, title, and priority edits are accepted on a closed task; `hippo-task done 3` on a task that's already done is recorded but changes nothing (exit 0, `applied: false` in its history), and on a cancelled task it completes it (no refusal).
+Closed tasks (`done` or `cancelled`): only `start` refuses them. `hippo-task update 3 --state todo` reopens one; notes, labels, title, and priority edits are accepted on a closed task; `hippo-task done 3` on a task that's already done is recorded but changes nothing (exit 0, `applied: false` in its history), and on a cancelled task it completes it (no refusal).
 
 ### JSON shapes
 
-With `--json`, stdout is exactly one JSON document. Every single-task command (`add`, `update`, `lease`, `start`, `release`, `note`, `desc`, `done`, `show`) prints a **task object**; `list` prints an array of them.
+With `--json`, stdout is exactly one JSON document. Every single-task command (`add`, `update`, `start`, `release`, `note`, `desc`, `done`, `show`) prints a **task object**; `list`, `release --all`, and `reclaim` print an array of them (for the last two, the tasks they handed back — possibly none).
 
 Task object:
 
@@ -54,16 +54,16 @@ Task object:
 - `labels` — sorted array of strings
 - `relations` — array of `{"rel": "blocked-by", "task": "<id>"}`
 - `blocked` — derived: true while any blocked-by task is still open
-- `lease` — null, or `{"holder", "node", "expires_ms", "active"}`: `holder` + `node` are the worker holding it; `expires_ms` is unix millis; `active` is whether it was still in force when the command ran
+- `lease` — who holds the task: null, or `{"holder", "node", "expires_ms", "active", "since_ms", "last_seen_ms"}`. `holder` + `node` are the worker; `expires_ms` is null for a claim (it holds until released, the task closes, or someone reclaims it) or unix millis for a timed lease from a 0.1.x ledger; `active` is whether it was in force when the command ran; `since_ms` is when this worker's hold began; `last_seen_ms` is the holder's latest event on the task — its last sign of life
 - `created_ms`, `updated_ms` — unix millis; `seq` — how many content changes the task has had
 
-`show --json` adds `events`: the task's full history in order. Each event is exactly the ledger line — `eid`, `task`, `ts`, `actor`, `node`, `type`, `data` — plus `applied`: false means it was recorded but had no effect (a rejected lease, a repeated change).
+`show --json` adds `events`: the task's full history in order. Each event is exactly the ledger line — `eid`, `task`, `ts`, `actor`, `node`, `type`, `data` — plus `applied`: false means it was recorded but had no effect (a rejected claim, a repeated change).
 
-`release --json` adds `released`: true if you held the lease and gave it back; false if you didn't hold it, so nothing changed (still exit 0 — either way you don't hold it afterwards).
+`release --json` adds `released`: true if you held the task and gave it back; false if you didn't hold it, so nothing changed (still exit 0 — either way you don't hold it afterwards).
 
-On stderr, `--json` mode writes JSON lines: zero or more `{"warning": "…"}`, then — on failure — one error object with the fields `error` (the kind), `message`, and `exit_code`, e.g. `{"error":"conflict","message":"#3 is leased to agent:codex@cx (7m left) — back off and pick another task","exit_code":4}`.
+On stderr, `--json` mode writes JSON lines: zero or more `{"warning": "…"}`, then — on failure — one error object with the fields `error` (the kind), `message`, and `exit_code`, e.g. `{"error":"conflict","message":"#3 is held by agent:codex@cx (quiet 7m) — back off and pick another task","exit_code":4}`.
 
-Stability: within 0.1.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
+Stability: within 0.2.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
 
 ## B. Changing this crate
 
