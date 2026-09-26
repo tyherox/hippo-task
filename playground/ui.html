@@ -182,7 +182,7 @@
       if(t.lease&&t.lease.holder===e.actor&&t.lease.node===e.node)t.lease.last_seen_ms=e.ts;
     }
     const open=new Set(Object.values(T).filter(x=>!closed(x.state)).map(x=>x.id));
-    for(const x of Object.values(T))x.blocked=x.relations.some(r=>r.rel==="blocked-by"&&r.task!==x.id&&open.has(r.task));
+    for(const x of Object.values(T))x.blocked=!closed(x.state)&&x.relations.some(r=>r.rel==="blocked-by"&&r.task!==x.id&&open.has(r.task));
     return{T,noops};
   }
   // Live: the CLI's projection. Sim: the mirror fold.

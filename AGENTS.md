@@ -54,7 +54,7 @@ Task object:
 - `assignee` — who *should* own it (durable intent, not a claim), or null
 - `labels` — sorted array of strings
 - `relations` — array of `{"rel": "blocked-by" | "duplicate-of", "task": "<id>"}`; only `blocked-by` affects `blocked`
-- `blocked` — derived: true while any blocked-by task is still open
+- `blocked` — derived: true while the task is open and any blocked-by task is still open
 - `lease` — who holds the task: null, or `{"holder", "node", "expires_ms", "active", "since_ms", "last_seen_ms"}`. `holder` + `node` are the worker; `expires_ms` is null for a claim (it holds until released, the task closes, or someone reclaims it) or unix millis for a timed lease from a 0.1.x ledger; `active` is whether it was in force when the command ran; `since_ms` is when this worker's hold began; `last_seen_ms` is the holder's latest event on the task — its last sign of life
 - `created_ms`, `updated_ms` — unix millis; `seq` — how many content changes the task has had
 

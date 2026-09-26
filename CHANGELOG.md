@@ -2,6 +2,12 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
+## [Unreleased]
+
+### Fixed
+
+- A closed task is never `blocked`. Before, a cancelled or done task still showed as blocked while its blocker was open.
+
 ## [0.3.0] - 2026-09-27 — internal release
 
 Duplicates: find before filing, mark when found ([ADR-004](docs/decisions/adr-004-duplicates.md)). **Upgrade every tool that shares a ledger together:** 0.2.x can't read `duplicate-of` relations and skips those lines with a warning.

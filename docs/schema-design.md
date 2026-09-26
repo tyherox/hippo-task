@@ -253,7 +253,7 @@ The staging rule in action: the field set + event sourcing shipped; the heavy ma
 ### D. Rules decided while hardening (refinements of §3–§5)
 1. **A hold (a claim, or a 0.1.x lease) belongs to actor + node** (refines §10A). `node` isn't only the tiebreak: two windows of the same agent are two *workers*, and only the holding worker can release it (a person or orchestrator can reclaim it — D8). Without this, two Claude windows could both "hold" one task — the first real use case.
 2. **Closed tasks hold nothing.** Entering done/cancelled clears the hold; a claim (or lease) on a closed task is rejected.
-3. **Blocked = has a blocked-by target that is still *open*** (refines §3's "isn't done"): a cancelled blocker no longer blocks; missing or self references never block.
+3. **Blocked = open, with a blocked-by target that is still *open*** (refines §3's "isn't done"): a cancelled blocker no longer blocks; missing or self references never block.
 4. **Idempotent projection.** An event that changes nothing is still appended (audit) but doesn't bump `seq`/`updated_ms`; the fold reports it, and history shows it as `applied: false` — `(rejected)` for a refused claim or lease, `(no change)` otherwise.
 5. **A note is activity**, not a content change: it bumps `updated_ms`, not `seq`.
 6. **First `create` wins**; events for a task that doesn't exist (yet, in fold order) are no-ops.

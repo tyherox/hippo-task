@@ -262,9 +262,10 @@ fn changed(did_change: bool) -> Effect {
     }
 }
 
-/// Derived, not stored: blocked iff some blocked-by target is an *open* task.
-/// A closed blocker (done or cancelled) no longer blocks; a missing one never
-/// did; a task can't block itself.
+/// Derived, not stored: an open task is blocked iff some blocked-by target is
+/// an *open* task. A closed blocker (done or cancelled) no longer blocks; a
+/// missing one never did; a task can't block itself; and a closed task is
+/// never blocked — nothing is left to wait for.
 fn derive_blocked(tasks: &mut BTreeMap<String, Task>) {
     let open: BTreeSet<String> = tasks
         .values()
@@ -272,10 +273,10 @@ fn derive_blocked(tasks: &mut BTreeMap<String, Task>) {
         .map(|t| t.id.clone())
         .collect();
     for t in tasks.values_mut() {
-        t.blocked = t
-            .relations
-            .iter()
-            .any(|r| r.rel == RelType::BlockedBy && r.task != t.id && open.contains(&r.task));
+        t.blocked = !t.state.is_closed()
+            && t.relations
+                .iter()
+                .any(|r| r.rel == RelType::BlockedBy && r.task != t.id && open.contains(&r.task));
     }
 }
 
@@ -870,6 +871,18 @@ mod tests {
     }
 
     #[test]
+    fn a_closed_task_is_never_blocked() {
+        // Nothing is left to wait for, even while its blocker is still open.
+        let p = fold(&[
+            create("e1", "T1", 1),
+            create("e2", "T2", 2),
+            block("e3", "T2", 3, "T1"),
+            state("e4", "T2", 4, State::Cancelled),
+        ]);
+        assert!(!task(&p, "T2").blocked);
+    }
+
+    #[test]
     fn a_duplicate_link_never_blocks() {
         // ADR-004: only `blocked-by` drives `blocked`; `duplicate-of` is a link.
         let kind = EventKind::Relate {
@@ -1021,9 +1034,10 @@ mod tests {
                     t.id
                 );
             }
-            let should_block = t.relations.iter().any(|r| {
-                r.rel == RelType::BlockedBy && r.task != t.id && open.contains(r.task.as_str())
-            });
+            let should_block = !t.state.is_closed()
+                && t.relations.iter().any(|r| {
+                    r.rel == RelType::BlockedBy && r.task != t.id && open.contains(r.task.as_str())
+                });
             assert_eq!(
                 t.blocked, should_block,
                 "seed {seed}: blocked flag wrong for {}",
