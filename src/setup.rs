@@ -266,11 +266,20 @@ pub fn ask(project: &Path, input: &mut impl BufRead, out: &mut impl Write) -> Re
     })
 }
 
-/// A typed path made absolute: `~/…` means the home folder, and a relative path
-/// is taken from the current folder.
+/// A typed path made absolute: `~/…` means the home folder (so does `~\…`, on
+/// Windows), and a relative path is taken from the current folder.
+///
+/// Rust note: std's `home_dir` is `$HOME` on macOS and Linux, and the user's
+/// profile folder on Windows, where `HOME` usually isn't set at all.
 pub fn absolute(typed: &str) -> Result<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let expanded = match (typed.strip_prefix("~/"), home) {
+    let rest = typed.strip_prefix("~/").or_else(|| {
+        if cfg!(windows) {
+            typed.strip_prefix("~\\")
+        } else {
+            None
+        }
+    });
+    let expanded = match (rest, std::env::home_dir()) {
         (Some(rest), Some(home)) => home.join(rest),
         _ => PathBuf::from(typed),
     };
@@ -313,8 +322,28 @@ fn create(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir).map_err(|e| Error::io(format!("couldn't create {}", dir.display()), e))
 }
 
+/// The real, absolute path: symlinks resolved, `..` gone — the form `init`
+/// stores and shows, so the same folder always reads the same.
 fn canonical(path: &Path) -> Result<PathBuf> {
-    fs::canonicalize(path).map_err(|e| Error::io(format!("couldn't resolve {}", path.display()), e))
+    let real = fs::canonicalize(path)
+        .map_err(|e| Error::io(format!("couldn't resolve {}", path.display()), e))?;
+    Ok(plain(real))
+}
+
+/// On Windows, `canonicalize` returns a "verbatim" path (`\\?\C:\work`), a
+/// form people don't type and some tools don't accept. For an ordinary drive
+/// path, the plain form (`C:\work`) means the same folder, so use that.
+/// Elsewhere, paths pass through unchanged.
+fn plain(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(rest) = path.to_str().and_then(|p| p.strip_prefix(r"\\?\")) {
+        // `C:\…` has a drive letter, then a colon. (`\\?\UNC\…` — a network
+        // share — is left as it is.)
+        if rest.as_bytes().get(1) == Some(&b':') {
+            return PathBuf::from(rest);
+        }
+    }
+    path
 }
 
 /// Keep `dir` out of git with its own `.gitignore` — unless it already has one.

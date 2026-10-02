@@ -2,6 +2,21 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
+## [0.4.1] - 2026-10-02 — internal release
+
+Portable: install and run it on macOS, Linux or Windows, with no Rust needed. Nothing changes for agents — same commands, same JSON.
+
+### Added
+
+- Prebuilt binaries for every release, each with a SHA-256 checksum: macOS (Apple silicon and Intel), Linux (x86_64 and arm64, statically linked, so they run on any distribution) and Windows (x86_64). Pushing a version tag builds and publishes them, then installs them on each OS as a check.
+- `scripts/install.sh` installs the right build on macOS or Linux with one line, checks its checksum, and upgrades in place when run again.
+- CI runs on Windows too: clippy and the whole test suite.
+
+### Fixed
+
+- Windows: creating a store no longer warns that its folder couldn't be flushed to disk. Windows can't flush a folder; the ledger file itself is still flushed on every write.
+- Windows: a typed `~/` (or `~\`) at the `init` prompt means your profile folder, and paths show as `C:\…` rather than `\\?\C:\…`.
+
 ## [0.4.0] - 2026-09-27 — internal release
 
 Where tasks live: chosen once, found from anywhere ([ADR-005](docs/decisions/adr-005-where-tasks-live.md)). **This release breaks things:** commands no longer create a store by accident.

@@ -316,24 +316,29 @@ fn force_lets_a_human_close_a_task_a_crashed_agent_holds() {
 fn concurrent_writers_lose_nothing_and_stay_in_time_order() {
     let dir = TempDir::new("cli-concurrent");
     ok(dir.path(), HUMAN, &["list"]);
-    let writers: Vec<Child> = (0..8)
+    // Eight writers at once, each adding 25 tasks one after another. Each
+    // writer is a thread running the real binary — not a shell loop — so this
+    // also runs on Windows, where file locks behave differently.
+    // test-weaken-ok: not a weakening — the writers moved from `sh` loops to
+    // threads so the test runs on Windows; every writer must still succeed.
+    let writers: Vec<_> = (0..8)
         .map(|w| {
-            let script = format!(
-                "for i in $(seq 1 25); do \"$0\" add \"w{w}-$i\" --label w{w} >/dev/null || exit 1; done"
-            );
-            std::process::Command::new("sh")
-                .arg("-c")
-                .arg(script)
-                .arg(env!("CARGO_BIN_EXE_hippo-task"))
-                .env("HIPPO_DIR", dir.path())
-                .env("HIPPO_ACTOR", format!("agent:w{w}"))
-                .env("HIPPO_NODE", format!("node{w}"))
-                .spawn()
-                .unwrap()
+            let dir = dir.path().to_path_buf();
+            std::thread::spawn(move || {
+                let (actor, node, label) =
+                    (format!("agent:w{w}"), format!("node{w}"), format!("w{w}"));
+                (1..=25).all(|i| {
+                    let title = format!("w{w}-{i}");
+                    cmd(&dir, (&actor, &node), &["add", &title, "--label", &label])
+                        .stdout(Stdio::null())
+                        .status()
+                        .is_ok_and(|status| status.success())
+                })
+            })
         })
         .collect();
-    for mut w in writers {
-        assert!(w.wait().unwrap().success());
+    for w in writers {
+        assert!(w.join().unwrap(), "every add of every writer succeeded");
     }
 
     let list = ok(dir.path(), HUMAN, &["list", "--json"]).json();

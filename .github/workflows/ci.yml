@@ -58,3 +58,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.89
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
+
+  # hippo-task runs on Windows too, where file locks and paths behave
+  # differently — and some code exists only there. The gate above already
+  # checks formatting and test integrity; this proves the Windows build is
+  # lint-clean and the whole suite passes on it.
+  windows:
+    name: tests on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked

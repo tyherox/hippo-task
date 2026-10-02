@@ -9,8 +9,10 @@ use common::TempDir;
 use hippo_task::error::Error;
 use hippo_task::model::{Event, EventKind, Priority};
 use hippo_task::store::Store;
+use std::cell::RefCell;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 fn event(eid: &str, task: &str, ts: i64) -> Event {
@@ -27,6 +29,25 @@ fn event(eid: &str, task: &str, ts: i64) -> Event {
             assignee: None,
         },
     }
+}
+
+#[test]
+fn creating_a_store_is_quiet() {
+    // The first write creates the folder and the ledger, then flushes the
+    // folders that list them to disk. That has to work on every platform —
+    // Windows included, where a folder can't be opened like a file — without
+    // a warning on a perfectly normal first write.
+    let dir = TempDir::new("store-create-quiet");
+    let warnings = Rc::new(RefCell::new(Vec::<String>::new()));
+    let sink = Rc::clone(&warnings);
+    let store = Store::new(dir.path()).on_warning(move |w| sink.borrow_mut().push(w.to_string()));
+    store
+        .begin()
+        .unwrap()
+        .commit(vec![event("E1", "T1", 1)])
+        .unwrap();
+    assert_eq!(store.read().unwrap().events.len(), 1);
+    assert!(warnings.borrow().is_empty(), "{:?}", warnings.borrow());
 }
 
 #[test]

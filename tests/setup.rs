@@ -47,7 +47,14 @@ fn repo(tag: &str) -> TempDir {
 }
 
 fn real(path: &Path) -> PathBuf {
-    fs::canonicalize(path).unwrap()
+    let real = fs::canonicalize(path).unwrap();
+    // On Windows, hippo-task shows `C:\…` rather than the `\\?\C:\…` that
+    // canonicalize returns (see `paths_are_shown_the_way_people_write_them`).
+    #[cfg(windows)]
+    if let Some(plain) = real.to_str().and_then(|p| p.strip_prefix(r"\\?\")) {
+        return PathBuf::from(plain);
+    }
+    real
 }
 
 fn ledgers_under(root: &Path) -> Vec<PathBuf> {
@@ -376,4 +383,28 @@ fn the_prompt_refuses_an_unknown_choice() {
     let dir = repo("setup-prompt-bad");
     let mut out = Vec::new();
     assert!(setup::ask(dir.path(), &mut Cursor::new("3\n"), &mut out).is_err());
+}
+
+// ---- the same on every platform ----
+
+#[test]
+fn a_typed_tilde_means_the_home_folder() {
+    // What a person types at the `init` prompt. Rust note: std's `home_dir`
+    // is $HOME on macOS and Linux, and the user's profile folder on Windows.
+    let home = std::env::home_dir().expect("a home folder");
+    assert_eq!(setup::absolute("~/tasks").unwrap(), home.join("tasks"));
+    #[cfg(windows)]
+    assert_eq!(setup::absolute(r"~\tasks").unwrap(), home.join("tasks"));
+}
+
+#[cfg(windows)]
+#[test]
+fn paths_are_shown_the_way_people_write_them() {
+    // Windows' canonical form of a path is `\\?\C:\…`; people and their tools write `C:\…`.
+    let dir = repo("setup-plain-paths");
+    let view = ok_at(dir.path(), HUMAN, &["init", "--here", "--json"]).json();
+    for path in [&view["project"], &view["store"]["path"]] {
+        let path = path.as_str().unwrap();
+        assert!(!path.starts_with(r"\\?\"), "{path}");
+    }
 }

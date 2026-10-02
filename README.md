@@ -6,18 +6,25 @@
 
 It's the reference implementation of the open agent-native task schema (`docs/schema-design.md`).
 
-**Status: 0.4.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
+**Status: 0.4.1 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
 
 *History:* HippoTask started as a TypeScript prototype of a universal interop schema with platform adapters — preserved at git tag `v0-typescript`, with its research (the 10-platform schema study, provider scorecards) in `docs/archive/typescript-v0/`. This Rust core narrows the first release to local, multi-agent task memory; platform adapters come back once sync is earned.
 
 ## Install
 
+**macOS or Linux**, no Rust needed:
+
 ```bash
-make doctor     # checks Rust ≥ 1.89, rustfmt, clippy
-make install    # = cargo install --locked --path .   → puts `hippo-task` on your PATH
+curl -fsSL https://raw.githubusercontent.com/tyherox/hippo-task/main/scripts/install.sh | sh
 ```
 
-Or run it from this folder: `cargo run -- list`.
+It downloads the latest release for your machine, checks its SHA-256, and puts `hippo-task` in `~/.local/bin` — or next to the copy already on your PATH. Run it again to upgrade; `… | HIPPO_VERSION=v0.4.1 sh` installs a specific release.
+
+**Windows:** download `hippo-task-x86_64-pc-windows-msvc.zip` from the [latest release](https://github.com/tyherox/hippo-task/releases/latest), unzip it, and put `hippo-task.exe` in a folder on your PATH.
+
+**From source**, anywhere with Rust ≥ 1.89: `cargo install --git https://github.com/tyherox/hippo-task --locked` — or, in a clone, `make install` (`make doctor` checks your toolchain first).
+
+Check it worked: `hippo-task --version`. To uninstall, delete the binary; your projects' tasks stay where they are.
 
 ## Set up a project
 
@@ -117,11 +124,13 @@ make play       # terminal playground: a REPL over the real binary, with identit
 make ui         # local playground: Live mode runs the real binary, Simulate runs in-browser
 ```
 
-Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `src/store.rs` → `src/ops.rs` → `src/error.rs` → `src/render.rs` → `src/setup.rs` → `src/main.rs`. The tests are the spec: `src/fold.rs` (merge rules + a property test), `tests/store.rs`, `tests/ops.rs`, `tests/cli.rs`, `tests/setup.rs`, `tests/docs.rs`.
+Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `src/store.rs` → `src/ops.rs` → `src/error.rs` → `src/render.rs` → `src/setup.rs` → `src/main.rs`. The tests are the spec: `src/fold.rs` (merge rules + a property test), `tests/store.rs`, `tests/ops.rs`, `tests/cli.rs`, `tests/setup.rs`, `tests/install.rs`, `tests/docs.rs`.
+
+**Releasing:** bump the version and add its CHANGELOG section, land both on `main`, then push that one tag (`git push origin v0.4.1`). `.github/workflows/release.yml` builds the macOS, Linux and Windows binaries, publishes them, and installs them on each OS as a check. Running the workflow by hand is a dry run that publishes nothing.
 
 ## Scope
 
-- **In 0.4.0:** single-file ledger in a store chosen with `init` and found from anywhere in the project; fold to state; twelve commands; actor + node identity; claims without timers, handed back by release or reclaim; search, and duplicates linked and cancelled; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
+- **In 0.4.1:** prebuilt binaries for macOS, Linux and Windows; single-file ledger in a store chosen with `init` and found from anywhere in the project; fold to state; twelve commands; actor + node identity; claims without timers, handed back by release or reclaim; search, and duplicates linked and cancelled; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
 - **Deferred until real use earns them (staging rule):** full Hybrid Logical Clock, per-task hash-chaining, snapshots/compaction, storage adapters, multi-machine sync, a GUI. The schema leaves room for each without a breaking change.
 
 ## Troubleshooting
@@ -130,6 +139,7 @@ Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `s
 - **`error: couldn't lock …`** — another `hippo-task` process held the ledger for over 10 s (a hung or suspended process?). Find and stop it, then retry.
 - **`error: no task store here or in any folder above it`** — this project hasn't chosen where its tasks live. A person runs `hippo-task init` (from anywhere inside the project).
 - **`error: no such directory`** — `--dir` / `HIPPO_DIR` must point at an existing folder; `hippo-task` won't create one for you (a typo would silently start a new, empty list).
+- **Something else?** [Open an issue](https://github.com/tyherox/hippo-task/issues) with `hippo-task --version`, your OS, the command you ran, and what it printed (with `--json`, an error is one line on stderr). Leave out task titles and notes — they're your project's data.
 
 ## License
 

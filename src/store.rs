@@ -337,7 +337,7 @@ impl Tx {
             return Err(Error::io(context, source));
         }
         for dir in &self.new_entries_in {
-            if let Err(e) = File::open(dir).and_then(|d| d.sync_all()) {
+            if let Err(e) = flush_dir(dir) {
                 // Best effort (some filesystems can't flush a directory):
                 // report it, but the events themselves are already on disk.
                 (self.warn)(&format!(
@@ -349,4 +349,22 @@ impl Tx {
         self.ledger.events.extend(new);
         Ok(self.ledger)
     }
+}
+
+/// Flush a folder's list of entries to disk, so a file just created in it
+/// survives a power cut.
+///
+/// Rust note: `#[cfg(...)]` picks one of these two functions at compile time,
+/// so each platform's binary only contains its own version.
+#[cfg(not(windows))]
+fn flush_dir(dir: &Path) -> std::io::Result<()> {
+    File::open(dir).and_then(|d| d.sync_all())
+}
+
+/// Windows can't open a folder as a plain file, so there's nothing to flush
+/// here; the ledger file itself was already flushed. (SQLite skips this step
+/// on Windows too.)
+#[cfg(windows)]
+fn flush_dir(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
 }

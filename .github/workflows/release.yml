@@ -1,0 +1,124 @@
+# Release binaries for HippoTask, so people can install it without Rust.
+#
+# Push a version tag on its own — `git push origin v0.4.1`, never `--tags` —
+# and this builds hippo-task for macOS, Linux and Windows, publishes a GitHub
+# Release with the archives and their SHA-256 checksums, then installs what it
+# published on each OS to prove it works. Run it by hand (Actions → release →
+# Run workflow) for a dry run: everything is built and packaged, nothing is
+# published.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # A release must carry the version its binaries report, and say what changed.
+  version:
+    name: version and changelog agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: compare the tag, Cargo.toml and CHANGELOG.md
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          echo "Cargo.toml: $version"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match version $version in Cargo.toml"
+            exit 1
+          fi
+          if ! grep -qF "## [$version]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, os: macos-latest } # Apple silicon
+          - { target: x86_64-apple-darwin, os: macos-latest } # Intel Macs (cross-compiled)
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # Linux builds link musl statically, so one binary runs on any distribution.
+      - name: install musl
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: package
+        shell: bash
+        run: |
+          binary="target/${{ matrix.target }}/release/hippo-task"
+          case "${{ matrix.target }}" in *windows*) binary="$binary.exe" ;; esac
+          sh scripts/package.sh "${{ matrix.target }}" "$binary" dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hippo-task-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish the release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload its files
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: release notes from CHANGELOG.md
+        run: |
+          heading="## [${GITHUB_REF_NAME#v}]"
+          awk -v heading="$heading" 'index($0, heading) == 1 { on = 1; next } on && /^## \[/ { exit } on { print }' CHANGELOG.md >notes.md
+          cat notes.md
+      - name: create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "hippo-task ${GITHUB_REF_NAME#v}" --notes-file notes.md
+
+  # Install what was just published, the way a teammate would, on each OS.
+  check:
+    name: install on ${{ matrix.os }}
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: install with scripts/install.sh
+        if: runner.os != 'Windows'
+        run: |
+          HIPPO_VERSION="$GITHUB_REF_NAME" HIPPO_INSTALL_DIR="$RUNNER_TEMP/bin" sh scripts/install.sh
+          test "$("$RUNNER_TEMP/bin/hippo-task" --version)" = "hippo-task ${GITHUB_REF_NAME#v}"
+      - name: download and unzip the Windows build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --pattern hippo-task-x86_64-pc-windows-msvc.zip
+          Expand-Archive hippo-task-x86_64-pc-windows-msvc.zip -DestinationPath .
+          $version = & .\hippo-task-x86_64-pc-windows-msvc\hippo-task.exe --version
+          if ($version -ne "hippo-task $($env:GITHUB_REF_NAME.Substring(1))") { throw "unexpected version: $version" }
+          "ok: $version"

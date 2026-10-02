@@ -1,0 +1,3 @@
+# LF line endings everywhere, Windows checkouts included: tests compare text
+# exactly, and the binary embeds AGENTS.md (`hippo-task guide`).
+* text=auto eol=lf
