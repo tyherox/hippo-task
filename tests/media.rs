@@ -6,13 +6,20 @@
 mod common;
 
 use common::{cmd, ok, tasks, TempDir, CLAUDE, CODEX, HUMAN};
+use hippo_task::store::Store;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0];
+const MIB: usize = 1024 * 1024;
 
 fn init(tag: &str) -> TempDir {
     let dir = TempDir::new(tag);
@@ -60,6 +67,30 @@ fn ftyp(brand: &[u8; 4]) -> Vec<u8> {
 
 fn write_config(dir: &Path, text: &str) {
     fs::write(dir.join(".hippotask").join("config.toml"), text).unwrap();
+}
+
+/// An MP4 header padded to `len` bytes of `fill` — big enough that hashing
+/// and copying it takes a while in a debug build.
+fn video(path: &Path, len: usize, fill: u8) {
+    let mut bytes = ftyp(b"isom");
+    bytes.resize(len, fill);
+    fs::write(path, &bytes).unwrap();
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Names in the store's `media/` folder that start with a dot: temporary copies.
+fn temporary_files(dir: &Path) -> Vec<String> {
+    fs::read_dir(media_dir(dir))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with('.'))
+        .collect()
 }
 
 #[test]
@@ -656,4 +687,181 @@ fn a_symlink_is_not_a_regular_file() {
             .contains("regular"),
         "{run:#?}"
     );
+}
+
+/// The name is the hash of the bytes stored: a file still being written while
+/// `desc` copies it is named by what was copied, never by an earlier read.
+#[test]
+fn a_file_that_grows_while_it_is_stored_is_named_by_the_bytes_stored() {
+    let dir = init("growing");
+    let d = dir.path();
+    ok(d, HUMAN, &["add", "clip"]);
+    let clip = d.join("clip.mp4");
+    video(&clip, 2 * MIB, 1);
+
+    let done = Arc::new(AtomicBool::new(false));
+    let writer = {
+        let (clip, done) = (clip.clone(), Arc::clone(&done));
+        thread::spawn(move || {
+            let mut file = fs::OpenOptions::new().append(true).open(&clip).unwrap();
+            let chunk = vec![2u8; 32 * 1024];
+            let mut len = 2 * MIB;
+            while !done.load(Ordering::Relaxed) && len < 24 * MIB {
+                file.write_all(&chunk).unwrap();
+                len += chunk.len();
+                thread::sleep(Duration::from_millis(2));
+            }
+        })
+    };
+    let md = format!("![the clip]({})", clip.display());
+    let run = tasks(d, HUMAN, &["desc", "1", &md, "--json"]);
+    done.store(true, Ordering::Relaxed);
+    writer.join().unwrap();
+    assert_eq!(run.code, 0, "{run:#?}");
+
+    let stored = stored_files(d);
+    assert_eq!(stored.len(), 1, "{stored:?}");
+    let name = stored[0].file_stem().unwrap().to_str().unwrap().to_string();
+    assert_eq!(
+        sha256_hex(&fs::read(&stored[0]).unwrap()),
+        name,
+        "the stored bytes hash to the file's name"
+    );
+    assert!(run.json()["body"].as_str().unwrap().contains(&name));
+    assert!(temporary_files(d).is_empty(), "{:?}", temporary_files(d));
+}
+
+/// Writers storing the same new file at once: one copy is kept, and every
+/// other writer's temporary copy is removed.
+#[test]
+fn writers_storing_the_same_file_at_once_leave_no_temporary_copies() {
+    let dir = init("same-file");
+    let d = dir.path();
+    let clip = d.join("clip.mp4");
+    video(&clip, 12 * MIB, 3);
+    for title in ["a", "b", "c"] {
+        ok(d, HUMAN, &["add", title]);
+    }
+    let md = format!("![the clip]({})", clip.display());
+    let writers: Vec<_> = [("1", CLAUDE), ("2", CODEX), ("3", HUMAN)]
+        .into_iter()
+        .map(|(id, who)| {
+            cmd(d, who, &["desc", id, &md])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for mut writer in writers {
+        assert!(writer.wait().unwrap().success());
+    }
+    assert!(temporary_files(d).is_empty(), "{:?}", temporary_files(d));
+    assert_eq!(stored_files(d).len(), 1, "{:?}", stored_files(d));
+}
+
+/// Export copies and checks files before it takes the ledger lock, so a big
+/// video doesn't hold up other writers (ADR-008).
+#[test]
+fn export_copies_files_without_holding_the_ledger_lock() {
+    let dir = init("export-lock");
+    let d = dir.path();
+    let clip = d.join("clip.mp4");
+    video(&clip, 16 * MIB, 4);
+    let md = format!("![the clip]({})", clip.display());
+    ok(d, HUMAN, &["add", "demo", "--body", &md]);
+
+    let out = d.join("out");
+    fs::create_dir(&out).unwrap();
+    let csv = out.join("tasks.csv");
+    let mut export = cmd(
+        d,
+        HUMAN,
+        &["export", "notion", "--out", csv.to_str().unwrap()],
+    )
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()
+    .unwrap();
+    // Another writer keeps taking the lock while the export runs. Holding the
+    // lock while hashing and copying, the export made it wait most of the
+    // run; holding it only to record, a small part of it. Comparing the two
+    // keeps this independent of how fast the machine is.
+    let started = Instant::now();
+    let store = Store::new(d).with_lock_timeout(Duration::from_secs(30));
+    let mut probes = 0;
+    let mut longest_wait = Duration::ZERO;
+    let status = loop {
+        if let Some(status) = export.try_wait().unwrap() {
+            break status;
+        }
+        let asked = Instant::now();
+        let tx = store.begin();
+        longest_wait = longest_wait.max(asked.elapsed());
+        assert!(tx.is_ok(), "{:?}", tx.err());
+        drop(tx);
+        probes += 1;
+        thread::sleep(Duration::from_millis(5));
+    };
+    let run = started.elapsed();
+    assert!(status.success());
+    assert!(probes > 0, "the export finished before any probe ran");
+    assert!(
+        longest_wait * 3 < run,
+        "another writer waited {longest_wait:?} for the lock during a {run:?} export"
+    );
+    assert!(csv.exists());
+    assert_eq!(fs::read_dir(out.join("media")).unwrap().count(), 1);
+}
+
+/// Search sees a link's URL — a PR or an issue is what you search for before
+/// filing a duplicate — but not a store file's name.
+#[test]
+fn search_matches_a_link_target_but_not_a_store_file() {
+    let dir = init("search-links");
+    let d = dir.path();
+    let md = "Fix tracked in [the PR](https://github.com/acme/app/pull/4821).";
+    ok(d, HUMAN, &["add", "token refresh", "--body", md]);
+    let found = ok(d, HUMAN, &["list", "--search", "pull/4821", "--json"]).json();
+    assert_eq!(found.as_array().unwrap().len(), 1, "{found}");
+
+    let shot = d.join("shot.png");
+    fs::write(&shot, PNG).unwrap();
+    let md = format!("![the 401]({})", shot.display());
+    ok(d, HUMAN, &["add", "bug", "--body", &md]);
+    let name = stored_files(d)[0]
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let linked = format!("the raw [file](media/{name})");
+    ok(d, HUMAN, &["add", "plain link", "--body", &linked]);
+    let media = ok(d, HUMAN, &["list", "--search", "media/", "--json"]).json();
+    assert_eq!(media.as_array().unwrap().len(), 0, "{media}");
+}
+
+/// Only an inline link — `![caption](path)` — is copied in. A reference-style
+/// image of a local file would keep a path no other machine has: refused.
+#[test]
+fn a_reference_style_image_of_a_local_file_is_refused() {
+    let dir = init("reference");
+    let d = dir.path();
+    ok(d, HUMAN, &["add", "t", "--body", "before"]);
+    let shot = d.join("ref.png");
+    fs::write(&shot, PNG).unwrap();
+    let def = format!("[s]: <{}>", shot.display());
+    for image in ["![shot][s]", "![s][]", "![s]"] {
+        let md = format!("See {image}.\n\n{def}");
+        let run = tasks(d, HUMAN, &["desc", "1", &md, "--json"]);
+        assert_eq!(run.code, 2, "{image}: {run:#?}");
+        let message = run.json_error()["message"].as_str().unwrap().to_string();
+        assert!(message.contains("inline"), "{image}: {message}");
+        assert_eq!(body_of(d, "1"), "before", "{image}: nothing was written");
+        assert!(stored_files(d).is_empty(), "{image}: nothing was copied");
+    }
+
+    let url = "See ![logo][l].\n\n[l]: https://example.com/logo.png";
+    ok(d, HUMAN, &["desc", "1", url]);
+    assert_eq!(body_of(d, "1"), url, "a reference to a URL is kept as text");
 }

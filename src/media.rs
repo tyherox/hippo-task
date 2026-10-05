@@ -515,16 +515,22 @@ fn scan_dest(s: &str) -> Option<(usize, String)> {
     Some((s.len(), out))
 }
 
-/// Text a search should see: prose and captions, not image destinations.
-/// Otherwise searching for `media` would match every task with a file.
+/// Text a search should see: prose, captions, and the URLs of links — a PR
+/// or an issue is what you search for before filing a duplicate. Not image
+/// destinations or store files: otherwise searching for `media` would match
+/// every task with a file.
 pub fn searchable(markdown: &str) -> String {
     let mut out = String::new();
-    for (event, _) in Parser::new(markdown).into_offset_iter() {
+    for event in Parser::new(markdown) {
         match event {
-            // Alt text is a text event; the destination is not, so a search
-            // for `media` doesn't hit every file link. Code is text too.
+            // Alt text is a text event; an image's destination is not. Code is text too.
             Event::Text(text) | Event::Code(text) => out.push_str(&text),
             Event::SoftBreak | Event::HardBreak => out.push('\n'),
+            Event::Start(Tag::Link { dest_url, .. }) if store_name(&dest_url).is_none() => {
+                out.push(' ');
+                out.push_str(&dest_url);
+                out.push(' ');
+            }
             _ => {}
         }
     }
@@ -652,9 +658,6 @@ pub fn ingest(
     let mut replacements = Vec::new();
     let mut copies: Vec<PathBuf> = Vec::new();
     for image in &found {
-        if image.link_type != LinkType::Inline {
-            continue;
-        }
         let dest = image.dest.as_str();
         if is_url(dest) {
             continue;
@@ -667,6 +670,14 @@ pub fn ingest(
                 }
             }
             continue;
+        }
+        // Only an inline link is rewritten. A reference (`![shot][s]` with
+        // `[s]: shot.png`) would keep a path no other machine has.
+        if image.link_type != LinkType::Inline {
+            let caption = &image.caption;
+            return Err(Error::Usage(format!(
+                "![{caption}] refers to the local file {dest} — write the image inline, ![{caption}]({dest}), so the file can be copied into the store"
+            )));
         }
         let local = resolve_local(dest, &anchor_dir);
         if let Some(name) = name_inside_media(&local, &media_dir) {
@@ -779,32 +790,39 @@ fn inspect_local(path: &Path, name: &str, limits: &MediaLimits) -> Result<Kind> 
     }
     let header = read_header(path)?;
     let kind = sniff(&header).map_err(|why| Error::Usage(format!("{name}: {why}")))?;
-    let cap = if kind.is_video() {
-        limits.max_video_bytes
-    } else {
-        limits.max_image_bytes
-    };
-    if meta.len() > cap {
-        let which = if kind.is_video() { "video" } else { "image" };
-        return Err(Error::Usage(format!(
-            "{name} is {} bytes, over the {cap}-byte limit for a {which} (raise it with [media] max_{which}_mib in config.toml)",
-            meta.len()
-        )));
-    }
+    within_cap(name, meta.len(), kind, limits)?;
     Ok(kind)
 }
 
-fn copy_in(src: &Path, media_dir: &Path, limits: &MediaLimits) -> Result<String> {
-    let kind = inspect_local(src, &src.display().to_string(), limits)?;
-    let hash = hash_file(src)
-        .map_err(|error| Error::io(format!("couldn't read {}", src.display()), error))?;
-    let file_name = format!("{hash}.{}", kind.ext());
-    let dest = media_dir.join(&file_name);
-    fs::create_dir_all(media_dir)
-        .map_err(|error| Error::io(format!("couldn't create {}", media_dir.display()), error))?;
-    match place_file(src, &dest)? {
-        Place::Already | Place::Written => {}
+/// Refuse a file over the cap for its type.
+fn within_cap(name: &str, len: u64, kind: Kind, limits: &MediaLimits) -> Result<()> {
+    let (cap, which) = if kind.is_video() {
+        (limits.max_video_bytes, "video")
+    } else {
+        (limits.max_image_bytes, "image")
+    };
+    if len > cap {
+        return Err(Error::Usage(format!(
+            "{name} is {len} bytes, over the {cap}-byte limit for a {which} (raise it with [media] max_{which}_mib in config.toml)"
+        )));
     }
+    Ok(())
+}
+
+/// Copy a local file into the store. `inspect_local` checked it already, but
+/// it may have changed since: the type, the cap and the name all come from
+/// the one read that copies it, so the name is the hash of the bytes stored.
+fn copy_in(src: &Path, media_dir: &Path, limits: &MediaLimits) -> Result<String> {
+    let name = src.display().to_string();
+    let limit = limits.max_image_bytes.max(limits.max_video_bytes);
+    let copy = copy_to_temp(src, media_dir, Some(limit))?;
+    if copy.len == 0 {
+        return Err(Error::Usage(format!("{name} is empty")));
+    }
+    let kind = sniff(&copy.header).map_err(|why| Error::Usage(format!("{name}: {why}")))?;
+    within_cap(&name, copy.len, kind, limits)?;
+    let file_name = format!("{}.{}", copy.sha256, kind.ext());
+    place(copy, &media_dir.join(&file_name))?;
     Ok(format!("media/{file_name}"))
 }
 
@@ -813,83 +831,49 @@ enum Place {
     Written,
 }
 
-/// Copy `src` to `dest` via a temporary name in the same folder: write, flush
-/// the file, rename, flush the folder. An existing file with the same bytes
-/// is left alone. Different bytes are a usage error — the name is a hash, so
-/// a mismatch is a collision or a corrupt name, and it is not overwritten.
-fn place_file(src: &Path, dest: &Path) -> Result<Place> {
-    if dest.is_file() {
-        return if same_bytes(src, dest)? {
-            Ok(Place::Already)
-        } else {
-            Err(Error::Usage(format!(
-                "{} already exists and its bytes differ — not overwritten",
-                dest.display()
-            )))
-        };
-    }
-    let parent = dest.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(parent)
-        .map_err(|error| Error::io(format!("couldn't create {}", parent.display()), error))?;
-    let tmp = parent.join(format!(
-        ".tmp-{}-{}",
-        std::process::id(),
-        TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
-    let wrote = (|| {
-        copy_flush(src, &tmp)?;
-        if dest.is_file() {
-            return if same_bytes(src, dest)? {
-                Ok(Place::Already)
-            } else {
-                Err(Error::Usage(format!(
-                    "{} already exists and its bytes differ — not overwritten",
-                    dest.display()
-                )))
-            };
-        }
-        fs::rename(&tmp, dest).map_err(|error| {
-            Error::io(
-                format!("couldn't rename {} to {}", tmp.display(), dest.display()),
-                error,
-            )
-        })?;
-        flush_dir(parent).map_err(|error| {
-            Error::io(
-                format!("couldn't flush the folder {}", parent.display()),
-                error,
-            )
-        })?;
-        Ok(Place::Written)
-    })();
-    if wrote.is_err() {
-        // The temporary name is not a content-addressed file. The final name,
-        // once renamed into place, is left even when a later step fails.
-        let _ = fs::remove_file(&tmp);
-    }
-    wrote
+/// A flushed copy under a temporary name, with the hash and length of exactly
+/// the bytes it holds. Unless [`place`] renames it into place, dropping it
+/// deletes it: a temporary name is never a stored file.
+#[derive(Debug)]
+struct TempCopy {
+    path: PathBuf,
+    sha256: String,
+    len: u64,
+    /// The first bytes, to read the type from.
+    header: Vec<u8>,
 }
 
-fn same_bytes(a: &Path, b: &Path) -> Result<bool> {
-    let ma = fs::metadata(a)
-        .map_err(|error| Error::io(format!("couldn't read {}", a.display()), error))?;
-    let mb = fs::metadata(b)
-        .map_err(|error| Error::io(format!("couldn't read {}", b.display()), error))?;
-    if ma.len() != mb.len() || !ma.is_file() || !mb.is_file() {
-        return Ok(false);
+impl Drop for TempCopy {
+    fn drop(&mut self) {
+        // Once renamed into place there's nothing here. Otherwise this is a
+        // leftover that nothing links; failing to delete it costs disk space only.
+        let _ = fs::remove_file(&self.path);
     }
-    let ha =
-        hash_file(a).map_err(|error| Error::io(format!("couldn't read {}", a.display()), error))?;
-    let hb =
-        hash_file(b).map_err(|error| Error::io(format!("couldn't read {}", b.display()), error))?;
-    Ok(ha == hb)
 }
 
-fn copy_flush(src: &Path, dest: &Path) -> Result<()> {
+/// Copy `src` into `dir` under a temporary name — hashing, counting, and
+/// keeping the first bytes in the same pass — and flush it. Past `limit`
+/// bytes it stops, and the partial copy is deleted.
+fn copy_to_temp(src: &Path, dir: &Path, limit: Option<u64>) -> Result<TempCopy> {
     let mut input = File::open(src)
         .map_err(|error| Error::io(format!("couldn't read {}", src.display()), error))?;
-    let mut output = File::create(dest)
-        .map_err(|error| Error::io(format!("couldn't create {}", dest.display()), error))?;
+    fs::create_dir_all(dir)
+        .map_err(|error| Error::io(format!("couldn't create {}", dir.display()), error))?;
+    // Declared before the output file, so on an early return the file is
+    // closed before the copy deletes it (Windows can't delete an open file).
+    let mut copy = TempCopy {
+        path: dir.join(format!(
+            ".tmp-{}-{}",
+            std::process::id(),
+            TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
+        )),
+        sha256: String::new(),
+        len: 0,
+        header: Vec::with_capacity(HEADER_LEN),
+    };
+    let mut output = File::create(&copy.path)
+        .map_err(|error| Error::io(format!("couldn't create {}", copy.path.display()), error))?;
+    let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
         let n = input
@@ -898,14 +882,76 @@ fn copy_flush(src: &Path, dest: &Path) -> Result<()> {
         if n == 0 {
             break;
         }
+        copy.len += n as u64;
+        if let Some(limit) = limit {
+            if copy.len > limit {
+                return Err(Error::Usage(format!(
+                    "{} grew past {limit} bytes while it was being copied",
+                    src.display()
+                )));
+            }
+        }
+        let chunk = &buf[..n];
+        hasher.update(chunk);
+        let room = HEADER_LEN.saturating_sub(copy.header.len());
+        copy.header.extend_from_slice(&chunk[..room.min(n)]);
         output
-            .write_all(&buf[..n])
-            .map_err(|error| Error::io(format!("couldn't write {}", dest.display()), error))?;
+            .write_all(chunk)
+            .map_err(|error| Error::io(format!("couldn't write {}", copy.path.display()), error))?;
     }
     output
         .sync_all()
-        .map_err(|error| Error::io(format!("couldn't flush {}", dest.display()), error))?;
-    Ok(())
+        .map_err(|error| Error::io(format!("couldn't flush {}", copy.path.display()), error))?;
+    copy.sha256 = hex_encode(&hasher.finalize());
+    Ok(copy)
+}
+
+/// Rename a temporary copy to `dest` and flush the folder. A file already
+/// there with the same bytes stays, and the copy is dropped. Different bytes
+/// are a usage error — the name is a hash, so a mismatch is a collision or a
+/// damaged file, and it is not overwritten. Once renamed, the file stays even
+/// if the flush fails.
+fn place(copy: TempCopy, dest: &Path) -> Result<Place> {
+    if dest.is_file() {
+        return if holds(dest, copy.len, &copy.sha256)? {
+            Ok(Place::Already)
+        } else {
+            Err(Error::Usage(format!(
+                "{} already exists and its bytes differ — not overwritten",
+                dest.display()
+            )))
+        };
+    }
+    fs::rename(&copy.path, dest).map_err(|error| {
+        Error::io(
+            format!(
+                "couldn't rename {} to {}",
+                copy.path.display(),
+                dest.display()
+            ),
+            error,
+        )
+    })?;
+    let parent = dest.parent().unwrap_or(Path::new("."));
+    flush_dir(parent).map_err(|error| {
+        Error::io(
+            format!("couldn't flush the folder {}", parent.display()),
+            error,
+        )
+    })?;
+    Ok(Place::Written)
+}
+
+/// Does the file at `path` hold exactly the bytes with this length and hash?
+fn holds(path: &Path, len: u64, sha256: &str) -> Result<bool> {
+    let meta = fs::metadata(path)
+        .map_err(|error| Error::io(format!("couldn't read {}", path.display()), error))?;
+    if !meta.is_file() || meta.len() != len {
+        return Ok(false);
+    }
+    let actual = hash_file(path)
+        .map_err(|error| Error::io(format!("couldn't read {}", path.display()), error))?;
+    Ok(actual == sha256)
 }
 
 fn hash_file(path: &Path) -> std::io::Result<String> {
@@ -932,10 +978,13 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// How many leading bytes are read to tell a file's type.
+const HEADER_LEN: usize = 4096;
+
 fn read_header(path: &Path) -> Result<Vec<u8>> {
     let mut file = File::open(path)
         .map_err(|error| Error::io(format!("couldn't read {}", path.display()), error))?;
-    let mut buf = vec![0u8; 4096];
+    let mut buf = vec![0u8; HEADER_LEN];
     let n = file
         .read(&mut buf)
         .map_err(|error| Error::io(format!("couldn't read {}", path.display()), error))?;
@@ -943,56 +992,38 @@ fn read_header(path: &Path) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// Copy the store files `markdowns` link to into `dest_dir`. A file already
-/// there with the same bytes is left alone and omitted from the result — the
-/// result is only the files this call copied. Different bytes stop the copy;
-/// files this call already wrote are removed, and the existing one is not.
-pub fn copy_referenced(folder: &Path, markdowns: &[&str], dest_dir: &Path) -> Result<Vec<PathBuf>> {
+/// Copy the store files `markdowns` link to into `dest_dir`, skipping any
+/// hash already in `handled` and adding each one this call deals with — so a
+/// second call copies only what the first didn't. A file already there with
+/// the same bytes is left alone and omitted from the result — the result is
+/// only the files this call copied. Different bytes stop the copy.
+///
+/// A copied file is never deleted, even when the export then fails: copying
+/// happens outside the ledger lock, so another export into the same folder
+/// may already link it. Beside a CSV, a file imports nothing on its own.
+pub fn copy_referenced(
+    folder: &Path,
+    markdowns: &[&str],
+    dest_dir: &Path,
+    handled: &mut BTreeSet<String>,
+) -> Result<Vec<PathBuf>> {
     let mut copied = Vec::new();
-    let mut seen = BTreeSet::new();
     for markdown in markdowns {
         for file in files_in(folder, markdown) {
-            if !seen.insert(file.sha256.clone()) {
-                continue;
-            }
-            if file.bytes.is_none() {
+            if file.bytes.is_none() || !handled.insert(file.sha256.clone()) {
                 continue;
             }
             let Some(name) = file.path.file_name() else {
                 continue;
             };
             let dest = dest_dir.join(name);
-            match place_file(&file.path, &dest) {
-                Ok(Place::Already) => {}
-                Ok(Place::Written) => copied.push(dest),
-                Err(error) => {
-                    let _ = remove_copied(&copied);
-                    return Err(error);
-                }
+            let copy = copy_to_temp(&file.path, dest_dir, None)?;
+            if let Place::Written = place(copy, &dest)? {
+                copied.push(dest);
             }
         }
     }
     Ok(copied)
-}
-
-/// Delete files this command copied. A file that was already there is not in
-/// `paths`, so it stays. Returns the notes to attach to the error.
-pub fn remove_copied(paths: &[PathBuf]) -> Vec<String> {
-    let mut notes = Vec::new();
-    for path in paths {
-        match fs::remove_file(path) {
-            Ok(()) => notes.push(format!(
-                "{} was deleted, since the export wasn't recorded",
-                path.display()
-            )),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => notes.push(format!(
-                "{} was copied but couldn't be deleted ({error}) — delete it before importing, or its tasks will be uploaded twice",
-                path.display()
-            )),
-        }
-    }
-    notes
 }
 
 #[cfg(not(windows))]
@@ -1303,6 +1334,74 @@ mod tests {
         assert!(text.contains("login box"), "{text}");
         assert!(!text.contains("media/"), "{text}");
         assert!(!text.contains("aaaa"), "{text}");
+    }
+
+    #[test]
+    fn search_text_keeps_a_link_url_but_not_a_store_file() {
+        let store = format!("media/{}.png", "b".repeat(64));
+        let body = format!(
+            "fixed in [the PR](https://github.com/acme/app/pull/4821)\n\n[raw]({store}) and ![x](https://example.com/a.png)"
+        );
+        let text = searchable(&body);
+        assert!(text.contains("the pr"), "{text}");
+        assert!(text.contains("github.com/acme/app/pull/4821"), "{text}");
+        assert!(text.contains("raw"), "{text}");
+        assert!(!text.contains("media/"), "{text}");
+        assert!(
+            !text.contains("example.com"),
+            "an image's target is not searched: {text}"
+        );
+    }
+
+    fn temp_names(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".tmp-"))
+            .collect()
+    }
+
+    #[test]
+    fn a_copy_names_the_bytes_it_copied_and_stops_at_its_limit() {
+        let (dir, _store) = temp_store("copy-limit");
+        let src = dir.0.join("shot.png");
+        fs::write(&src, png()).unwrap();
+        let out = dir.0.join("out");
+
+        let copy = copy_to_temp(&src, &out, Some(10)).unwrap();
+        assert_eq!(copy.len, 10);
+        assert_eq!(copy.header, png());
+        assert_eq!(copy.sha256, hash_file(&src).unwrap());
+        drop(copy);
+        assert!(
+            temp_names(&out).is_empty(),
+            "an unplaced copy deletes itself"
+        );
+
+        let over = copy_to_temp(&src, &out, Some(9));
+        assert!(matches!(over, Err(Error::Usage(_))), "{over:?}");
+        assert!(temp_names(&out).is_empty(), "a refused copy leaves nothing");
+    }
+
+    #[test]
+    fn placing_bytes_already_there_keeps_the_file_and_drops_the_copy() {
+        let (dir, _store) = temp_store("place");
+        let src = dir.0.join("shot.png");
+        fs::write(&src, png()).unwrap();
+        let out = dir.0.join("out");
+        let dest = out.join("kept.png");
+
+        let first = copy_to_temp(&src, &out, None).unwrap();
+        assert!(matches!(place(first, &dest), Ok(Place::Written)));
+        let second = copy_to_temp(&src, &out, None).unwrap();
+        assert!(matches!(place(second, &dest), Ok(Place::Already)));
+        assert!(temp_names(&out).is_empty(), "{:?}", temp_names(&out));
+
+        fs::write(&dest, b"other bytes").unwrap();
+        let third = copy_to_temp(&src, &out, None).unwrap();
+        assert!(matches!(place(third, &dest), Err(Error::Usage(_))));
+        assert_eq!(fs::read(&dest).unwrap(), b"other bytes", "not overwritten");
+        assert!(temp_names(&out).is_empty(), "{:?}", temp_names(&out));
     }
 
     fn temp_store(tag: &str) -> (TempfileDir, Store) {

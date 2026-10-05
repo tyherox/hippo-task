@@ -1043,35 +1043,50 @@ pub fn export(
             media_files: Vec::new(),
         });
     };
-    // For real: choose under the lock, so what's recorded is what was written.
+    // For real. Checking and copying files happens before the ledger is
+    // locked, so a big video never holds up other writers (ADR-008): it's
+    // done for the tasks a plain read picks.
+    let dest_dir = out.parent().unwrap_or(Path::new(".")).join("media");
+    let mut handled = BTreeSet::new();
+    let mut copied = Vec::new();
+    {
+        let events = store.read()?.events;
+        let proj = fold::fold(&events);
+        let (picked, changed) = choose(&events, &proj, selection, &labels, to, &config.fields);
+        media::warn_about(store, &picked, true);
+        media::warn_about(store, &changed, true);
+        if !picked.is_empty() {
+            // Refuse an existing CSV before copying, so a refusal leaves no new files.
+            refuse_existing(out)?;
+            copied =
+                media::copy_referenced(store.folder(), &bodies(&picked), &dest_dir, &mut handled)?;
+        }
+    }
+    // Then choose again under the lock, so what's recorded is what was written.
     let mut tx = store.begin()?;
     let proj = fold::fold(tx.events());
     let (picked, changed) = choose(tx.events(), &proj, selection, &labels, to, &config.fields);
     let csv = render::notion_csv(&picked, &proj.tasks, &config.fields);
-    media::warn_about(store, &picked, true);
-    media::warn_about(store, &changed, true);
     if picked.is_empty() {
+        // Another export took them in the meantime. Files copied for them
+        // stay: that export may link the same ones.
         return Ok(Exported {
             csv,
             tasks: picked,
             changed,
             file: None, // nothing new: no empty file to import by mistake
-            media_files: Vec::new(),
+            media_files: copied,
         });
     }
-    // Refuse an existing CSV before copying, so a refusal leaves no new files.
-    if out.exists() {
-        return Err(Error::Usage(format!(
-            "{} already exists — export to a new file (and if that one hasn't been imported yet, import it first)",
-            out.display()
-        )));
-    }
-    let markdowns: Vec<&str> = picked.iter().filter_map(|t| t.body.as_deref()).collect();
-    let dest_dir = out.parent().unwrap_or(Path::new(".")).join("media");
-    let copied = media::copy_referenced(store.folder(), &markdowns, &dest_dir)?;
+    // Checked again under the lock: another export may have written it since.
+    refuse_existing(out)?;
+    // A task picked or edited since the read may link a file not copied yet.
+    // Usually there's none; a file the first pass handled isn't checked again.
+    let more = media::copy_referenced(store.folder(), &bodies(&picked), &dest_dir, &mut handled)?;
+    copied.extend(more);
     // The file first: if it can't be written, nothing is marked exported.
     if let Err(error) = write_new_file(out, &csv) {
-        return Err(unrecorded(out, &copied, error));
+        return Err(unrecorded(out, error));
     }
     let events: Vec<Event> = picked
         .iter()
@@ -1082,7 +1097,7 @@ pub fn export(
             ctx.event(&mut tx, &t.id, kind)
         })
         .collect();
-    let ledger = tx.commit(events).map_err(|e| unrecorded(out, &copied, e))?;
+    let ledger = tx.commit(events).map_err(|e| unrecorded(out, e))?;
     let tasks = tasks_in(fold::fold(&ledger.events), &picked)?;
     Ok(Exported {
         csv,
@@ -1165,11 +1180,11 @@ impl<'a> AsExported<'a> {
     }
 }
 
-/// Recording an export failed after its file was written: delete the CSV and
-/// the media files this command copied, so nobody imports tasks the next
-/// export would send again. A file that was already beside the CSV is not in
-/// `copied`, so it stays (ADR-007 amendment 4, ADR-008).
-fn unrecorded(path: &Path, copied: &[PathBuf], e: Error) -> Error {
+/// Recording an export failed after its CSV was written: delete the CSV, so
+/// nobody imports tasks the next export would send again (ADR-007 amendment
+/// 4). The media files it copied stay: copied outside the ledger lock, another
+/// export may already link them, and they import nothing on their own (ADR-008).
+fn unrecorded(path: &Path, e: Error) -> Error {
     let mut notes = Vec::new();
     match fs::remove_file(path) {
         Ok(()) => notes.push(format!(
@@ -1182,7 +1197,6 @@ fn unrecorded(path: &Path, copied: &[PathBuf], e: Error) -> Error {
             path.display()
         )),
     }
-    notes.extend(media::remove_copied(copied));
     let note = notes.join("; ");
     let with = |msg: String| {
         if note.is_empty() {
@@ -1198,6 +1212,22 @@ fn unrecorded(path: &Path, copied: &[PathBuf], e: Error) -> Error {
         Error::Stale(m) => Error::Stale(with(m)),
         Error::NotFound(id) => Error::NotFound(id),
     }
+}
+
+/// The descriptions of `tasks` — what an export's files are linked from.
+fn bodies(tasks: &[Task]) -> Vec<&str> {
+    tasks.iter().filter_map(|t| t.body.as_deref()).collect()
+}
+
+/// `--out` never names an existing file (ADR-007).
+fn refuse_existing(out: &Path) -> Result<()> {
+    if out.exists() {
+        return Err(Error::Usage(format!(
+            "{} already exists — export to a new file (and if that one hasn't been imported yet, import it first)",
+            out.display()
+        )));
+    }
+    Ok(())
 }
 
 /// Write a new file — never over an existing one (ADR-007): an earlier export
