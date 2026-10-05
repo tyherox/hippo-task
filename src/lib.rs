@@ -13,11 +13,17 @@
 //! 5. [`error`]  — every failure has a kind and an exit code.
 //! 6. [`render`] — the JSON shapes agents parse, and the text humans read.
 //! 7. [`setup`]  — where a project's tasks live: `init`, finding the store, `guide`.
+//! 8. [`config`] — a store's `config.toml`: the fields a team declares (ADR-006),
+//!    and the caps for description media (ADR-008).
+//! 9. [`media`] — description markdown: image links, content-addressed files,
+//!    and the paragraph merge `desc --base` uses (ADR-008).
 //!
 //! `src/main.rs` is only argument parsing and printing.
 
+pub mod config;
 pub mod error;
 pub mod fold;
+pub mod media;
 pub mod model;
 pub mod ops;
 pub mod render;

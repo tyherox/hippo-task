@@ -518,24 +518,29 @@ fn text_output_is_for_humans_and_says_what_happened() {
 
 #[test]
 fn json_shapes_are_frozen_within_a_minor_version() {
-    // AGENTS.md promises that within 0.2.x, --json fields are only ever added:
+    // AGENTS.md promises that within a minor version, --json fields are only ever added:
     // removing or renaming one must fail here; adding one is a deliberate edit of this list.
-    // (0.2.0 added `since_ms` and `last_seen_ms` to the lease object — ADR-003.)
-    const TASK: [&str; 14] = [
+    // (0.2.0 added `since_ms` and `last_seen_ms` to the lease object — ADR-003;
+    // 0.5.0 added `fields` — ADR-006 — and `exported` — ADR-007.
+    // 0.6.0 added `media` — ADR-008.)
+    const TASK: [&str; 17] = [
         "id",
         "num",
         "title",
         "body",
+        "media",
         "state",
         "priority",
         "assignee",
         "labels",
+        "fields",
         "relations",
         "blocked",
         "lease",
         "created_ms",
         "updated_ms",
         "seq",
+        "exported",
     ];
     const LEASE: [&str; 6] = [
         "holder",

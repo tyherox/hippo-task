@@ -6,7 +6,7 @@
 
 It's the reference implementation of the open agent-native task schema (`docs/schema-design.md`).
 
-**Status: 0.4.1 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
+**Status: 0.6.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
 
 *History:* HippoTask started as a TypeScript prototype of a universal interop schema with platform adapters — preserved at git tag `v0-typescript`, with its research (the 10-platform schema study, provider scorecards) in `docs/archive/typescript-v0/`. This Rust core narrows the first release to local, multi-agent task memory; platform adapters come back once sync is earned.
 
@@ -65,6 +65,8 @@ hippo-task update 8 --duplicate-of 5             # a duplicate: link it to the o
 hippo-task start 3                               # claim it + set doing — no timer: yours until done or released
 hippo-task note 3 "left off at the token refresh"
 hippo-task desc 3 "One paragraph describing the task"
+hippo-task desc 3 --file note.md          # markdown; a local screenshot is copied in
+hippo-task desc 3 --base 4 "updated text" # merge with the description as of seq 4
 hippo-task release 3                             # hand it back unfinished: back to todo, free for the next worker
 hippo-task release --all                         # on exit: give back everything this worker holds
 hippo-task reclaim 3 --reason "window closed"    # a person takes back a stuck worker's task (--from <node>: all of it)
@@ -74,6 +76,44 @@ hippo-task done 3                                # complete (and release)
 Every command accepts `--json` (see `AGENTS.md` for the shapes). `release --json` also reports `released`: whether you actually held the task. `release --all` and `reclaim` print an array of the tasks they handed back.
 
 **Task ids:** the number (`3`, shown as `#3`), the full ULID, or 4+ trailing characters of it. In a shell, don't type `#3` unquoted — `#` starts a comment; type `3`.
+
+## Fields: project, team, and whatever else you sort by
+
+Labels are free-form tags. **Fields** are attributes with one value per task — the project it belongs to, the team that owns it — declared in the store's `config.toml`, next to its ledger (`.hippotask/config.toml` for most projects). A field can list its allowed values:
+
+```toml
+[fields.project]
+values = ["dashboard", "billing"]
+
+[fields.team]
+values = ["engineering-whiteboards", "design"]
+
+[fields.customer]          # no list: any text
+display_name = "Client"    # the column heading in exports (default: the name, capitalized)
+```
+
+```bash
+hippo-task fields                                     # what's declared, and how much each value is used
+hippo-task add "Design the toolbar" --field project=dashboard --field team=design
+hippo-task update 3 --field project=billing           # one value per field: this replaces it
+hippo-task update 3 --clear-field team
+hippo-task list --field project=dashboard --label bug # filters combine
+```
+
+A field that isn't declared, or a value that isn't on its list, is refused with the closest match ("did you mean `dashboard`?"). Changing the config never changes a task: a value the config no longer allows stays on its tasks, and `hippo-task fields` lists it so you can fix it.
+
+## Upload to Notion
+
+Draft and organize tasks here, then move them to Notion — no API key or paid plan:
+
+```bash
+hippo-task export notion                              # preview the CSV
+hippo-task export notion --field project=dashboard --out dashboard.csv
+```
+
+In Notion, **Import → CSV** turns the file into a new database; to add rows to an existing one, use its **••• → Merge with CSV** (the headers must match its property names). Columns: Name, Status (`Not started`, `In progress`, `Done`), Priority, one per field, Tags (the labels), Assignee, Description, Blocked by, and hippo-task ID. If an import leaves a column as plain text, switch it — Status to a Status property, Priority and the fields to Select, Tags to Multi-select — and Notion converts the values.
+
+`--out` remembers what it exported, because Notion's import only ever adds rows: each task records an `export` event, and the next export skips it. A preview records nothing. The report names tasks that changed after their export — update those in Notion by hand, or `--again` adds them as new rows. `--all` includes closed tasks, and `--out` never overwrites a file.
 
 ## Identity: actor + node
 
@@ -95,6 +135,7 @@ HIPPO_ACTOR=agent:claude HIPPO_NODE=win-2 hippo-task start 3    # → exit 4: he
 | 2 | `usage` | invalid input: bad value, ambiguous or too-short id, nothing to do, `--dir` doesn't exist |
 | 3 | `not_found` | no task matches the id |
 | 4 | `conflict` | held by another worker — or, for `start`, the task is closed; or an agent reclaiming without `--force` |
+| 5 | `stale` | the description changed since `--base`, and the edits conflict |
 
 Errors go to stderr as `error: …` (a JSON line with `--json`); results go to stdout.
 
@@ -104,15 +145,17 @@ Errors go to stderr as `error: …` (a JSON line with `--json`); results go to s
 - **Whoever knows hands work back:** `release` by the holder returns a started task to `todo`, and `release --all` gives back everything a worker holds — run it from a session's exit hook or a workflow's cleanup. A worker that can't (it crashed, or its window closed) keeps its claim until a person — or the orchestrator that launched it — runs `reclaim` (agents need `--force`); `list --held` shows who's been quiet. Every reclaim is recorded, with its reason.
 - **State belongs to the holder:** while someone holds a task, only they can change its state — including completing or cancelling it. Everyone can still edit title, priority, labels, notes. `--force` overrides the state for a human; it doesn't take the claim — `reclaim` does. Closing clears the claim. A closed task can't be started (exit 4) — reopen it with `hippo-task update 3 --state todo`; notes, labels, title, and priority stay editable, and `hippo-task done 3` on a task that's already done is recorded but changes nothing (on a cancelled task it completes it — no refusal).
 - **Blocked is derived:** an open task is blocked while any task it's blocked by is still open. A closed task is never blocked.
-- **Duplicates are found, then marked:** `list --search` matches the title or description, ignoring case, in any state — check it before filing. `update --duplicate-of` links a duplicate to its original and cancels it, so it never counts as finished work; closing it follows the same holder rule as any other close. A duplicate link never blocks.
+- **Duplicates are found, then marked:** `list --search` matches the title, the description, and image captions, ignoring case, in any state — not the `media/…` path of a file. Check it before filing. `update --duplicate-of` links a duplicate to its original and cancels it, so it never counts as finished work; closing it follows the same holder rule as any other close. A duplicate link never blocks.
+- **Descriptions are markdown, and anyone may edit them.** `desc`, `add --body`, and `update --body` store the source and copy local images and video into the store's `media/` folder, named by their bytes. `desc --base <seq>` merges a concurrent edit by paragraph; if both sides rewrote the same paragraph, the command exits 5 and writes nothing. The description is not reserved for the holder.
 - **Merging, not clobbering:** concurrent label/relation changes all survive; for single fields the last write wins. Repeating a change (adding a label twice) is recorded but changes nothing — shown as `(no change)`.
 
 ## Data, durability, privacy
 
 - The ledger is `ledger.jsonl` in the project's store — `.hippotask/`, or the folder chosen with `hippo-task init --folder`. Commands find it from the current folder upward; `--dir` / `HIPPO_DIR` names the project folder explicitly instead (it must exist). One JSON event per line, append-only.
 - Writes are serialized by a file lock and flushed to disk (fsync) before a command reports success. A write that fails is rolled back, so a failed command never leaves half a change behind. Timestamps strictly increase, so the file's order is the true order of events — even within one millisecond.
-- A crash mid-write can leave one unreadable line: every command then warns about it (never silently), and it can't damage later writes.
-- **Privacy:** by default nothing about you or your machine is recorded — no username, no hostname. What you type — titles, notes, descriptions, and any actor name you choose — is stored **in cleartext, and forever** (append-only means it can't be edited out). Don't put secrets or personal data in tasks. If you commit `.hippotask/` to git, everyone who can read the repo can read it.
+- A crash mid-write can leave one unreadable line: every command then warns about it (never silently), and it can't damage later writes. A line written by a newer hippo-task is skipped with a warning to upgrade.
+- The store's settings — the fields it declares — are in `config.toml` next to the ledger. Only the CLI reads it; editing it never rewrites history.
+- **Privacy:** by default nothing about you or your machine is recorded — no username, no hostname. What you type — titles, notes, descriptions, and any actor name you choose — is stored **in cleartext, and forever** (append-only means it can't be edited out). Don't put secrets or personal data in tasks. Files linked from a description are stored byte for byte, including any metadata the device wrote — a phone photo can carry the place it was taken. Screenshots and screen recordings typically don't. Stripping that metadata is later work. If you commit the store to git, everyone who can read the repo can read it, files included. The store's own `.gitignore` ignores the whole folder (so `media/` with it). A team that commits the store anyway commits those files too, and a 64 MiB video is past the 50 MiB size at which GitHub warns.
 
 ## Develop
 
@@ -124,13 +167,13 @@ make play       # terminal playground: a REPL over the real binary, with identit
 make ui         # local playground: Live mode runs the real binary, Simulate runs in-browser
 ```
 
-Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `src/store.rs` → `src/ops.rs` → `src/error.rs` → `src/render.rs` → `src/setup.rs` → `src/main.rs`. The tests are the spec: `src/fold.rs` (merge rules + a property test), `tests/store.rs`, `tests/ops.rs`, `tests/cli.rs`, `tests/setup.rs`, `tests/install.rs`, `tests/docs.rs`.
+Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `src/store.rs` → `src/ops.rs` → `src/error.rs` → `src/render.rs` → `src/setup.rs` → `src/config.rs` → `src/main.rs`. The tests are the spec: `src/fold.rs` (merge rules + a property test), `tests/store.rs`, `tests/ops.rs`, `tests/cli.rs`, `tests/setup.rs`, `tests/fields.rs`, `tests/export.rs`, `tests/install.rs`, `tests/docs.rs`.
 
 **Releasing:** bump the version and add its CHANGELOG section, land both on `main`, then push that one tag (`git push origin v0.4.1`). `.github/workflows/release.yml` builds the macOS, Linux and Windows binaries, publishes them, and installs them on each OS as a check. Running the workflow by hand is a dry run that publishes nothing.
 
 ## Scope
 
-- **In 0.4.1:** prebuilt binaries for macOS, Linux and Windows; single-file ledger in a store chosen with `init` and found from anywhere in the project; fold to state; twelve commands; actor + node identity; claims without timers, handed back by release or reclaim; search, and duplicates linked and cancelled; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
+- **In 0.6.0:** descriptions are markdown, with images and video stored beside the ledger and merged by paragraph when two edits race; fields declared in `config.toml`, and export to Notion (CSV, with those files copied beside it) that remembers what it exported; prebuilt binaries for macOS, Linux and Windows; single-file ledger in a store chosen with `init` and found from anywhere in the project; fold to state; fourteen commands; actor + node identity; claims without timers, handed back by release or reclaim; search, and duplicates linked and cancelled; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
 - **Deferred until real use earns them (staging rule):** full Hybrid Logical Clock, per-task hash-chaining, snapshots/compaction, storage adapters, multi-machine sync, a GUI. The schema leaves room for each without a breaking change.
 
 ## Troubleshooting

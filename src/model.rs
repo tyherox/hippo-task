@@ -12,7 +12,7 @@
 //!   bottom of this file check that, so text output and JSON can't drift apart.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Canonical task lifecycle. NOTE: "blocked" is intentionally NOT a state —
@@ -169,12 +169,18 @@ pub struct Task {
     pub priority: Priority,
     pub assignee: Option<String>, // durable intent (who *should* own it)
     pub labels: BTreeSet<String>, // a SET → concurrent adds don't clobber
+    /// Declared attributes, one value each — `project` → `dashboard` (ADR-006).
+    /// A MAP of independent scalars: each field is last-writer-wins on its own.
+    pub fields: BTreeMap<String, String>,
     pub relations: Vec<Relation>,
     pub lease: Option<Lease>, // ephemeral: who's *actively* doing it now
     pub created_ms: i64,
     pub updated_ms: i64,
     pub seq: u64,      // count of content changes (interop SEQUENCE)
     pub blocked: bool, // derived after the fold
+    /// Where the task was uploaded, and when: `notion` → unix ms (ADR-007).
+    /// Bookkeeping, not content: it never bumps `seq` or `updated_ms`.
+    pub exported: BTreeMap<String, i64>,
 }
 
 impl Task {
@@ -264,6 +270,16 @@ pub enum EventKind {
     },
     Release,
     Complete,
+    /// Set a declared field to one value, or clear it with `value: null`
+    /// (ADR-006). The value is text; the config says which values are allowed.
+    SetField {
+        field: String,
+        value: Option<String>,
+    },
+    /// The task was uploaded to `to` (e.g. `notion`) — bookkeeping (ADR-007).
+    Export {
+        to: String,
+    },
 }
 
 impl EventKind {
@@ -286,6 +302,8 @@ impl EventKind {
             EventKind::Note { .. } => "note",
             EventKind::Release => "release",
             EventKind::Complete => "complete",
+            EventKind::SetField { .. } => "set-field",
+            EventKind::Export { .. } => "export",
         }
     }
 }
@@ -337,6 +355,17 @@ mod tests {
             EventKind::Note { text: "n".into() },
             EventKind::Release,
             EventKind::Complete,
+            EventKind::SetField {
+                field: "project".into(),
+                value: Some("dashboard".into()),
+            },
+            EventKind::SetField {
+                field: "project".into(),
+                value: None,
+            },
+            EventKind::Export {
+                to: "notion".into(),
+            },
         ]
     }
 
@@ -451,6 +480,46 @@ mod tests {
             r#"{"eid":"E1","task":"T1","ts":5,"actor":"agent:a","node":"n1","type":"reclaim","data":{"holder":"agent:b","node":"n2","reason":"window closed"}}"#
         );
         assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), reclaim);
+
+        // 0.5.0's kinds (ADR-006, ADR-007), frozen from their first release.
+        let set_field = Event {
+            kind: EventKind::SetField {
+                field: "project".into(),
+                value: Some("dashboard".into()),
+            },
+            ..ev.clone()
+        };
+        let line = serde_json::to_string(&set_field).unwrap();
+        assert_eq!(
+            line,
+            r#"{"eid":"E1","task":"T1","ts":5,"actor":"agent:a","node":"n1","type":"set-field","data":{"field":"project","value":"dashboard"}}"#
+        );
+        assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), set_field);
+        let cleared = Event {
+            kind: EventKind::SetField {
+                field: "project".into(),
+                value: None,
+            },
+            ..ev.clone()
+        };
+        let line = serde_json::to_string(&cleared).unwrap();
+        assert_eq!(
+            line,
+            r#"{"eid":"E1","task":"T1","ts":5,"actor":"agent:a","node":"n1","type":"set-field","data":{"field":"project","value":null}}"#
+        );
+        assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), cleared);
+        let export = Event {
+            kind: EventKind::Export {
+                to: "notion".into(),
+            },
+            ..ev.clone()
+        };
+        let line = serde_json::to_string(&export).unwrap();
+        assert_eq!(
+            line,
+            r#"{"eid":"E1","task":"T1","ts":5,"actor":"agent:a","node":"n1","type":"export","data":{"to":"notion"}}"#
+        );
+        assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), export);
     }
 
     #[test]

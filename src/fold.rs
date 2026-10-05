@@ -10,8 +10,12 @@
 //! - **Order.** Events apply in `(ts, node, eid)` order — a total order every
 //!   reader computes identically, whatever order the file lists them in.
 //! - **Scalars** (title, state, priority, assignee, body): last writer wins.
+//! - **Fields** (ADR-006): a map of scalars — each field is last-writer-wins on
+//!   its own, so setting `project` never disturbs `team`.
 //! - **Collections** (labels, relations): set operations, so two agents adding
 //!   different labels at the same time both survive.
+//! - **Bookkeeping** (an export, ADR-007) is remembered on the task but isn't
+//!   a change: it moves neither `seq` nor `updated_ms`.
 //! - **Idempotent.** An event that changes nothing is still in the ledger
 //!   (audit) but doesn't bump `seq`/`updated_ms`; it's listed in
 //!   [`Projection::noops`] so the history can say "(no change)" / "(rejected)".
@@ -51,6 +55,9 @@ enum Effect {
     Activity,
     /// Content changed: bumps `updated_ms` and `seq`.
     Changed,
+    /// Recorded without touching the task's content or activity time (an
+    /// export): applied — so not a no-op — but bumps nothing.
+    Recorded,
 }
 
 /// Events sorted into the one order every reader agrees on: `(ts, node, eid)`.
@@ -73,68 +80,101 @@ pub fn in_order<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<&'a Even
 pub fn fold<'a>(events: impl IntoIterator<Item = &'a Event>) -> Projection {
     let mut out = Projection::default();
     let mut next_num: u64 = 1;
-
     for ev in in_order(events) {
-        // Only a Create introduces a task, and the first Create for an id wins.
-        if let EventKind::Create {
-            title,
-            priority,
-            body,
-            assignee,
-        } = &ev.kind
-        {
-            if out.tasks.contains_key(&ev.task) {
-                out.noops.insert(ev.eid.clone());
-            } else {
-                let task = Task {
-                    id: ev.task.clone(),
-                    num: next_num,
-                    title: title.clone(),
-                    body: body.clone(),
-                    state: State::Todo,
-                    priority: *priority,
-                    assignee: assignee.clone(),
-                    labels: BTreeSet::new(),
-                    relations: Vec::new(),
-                    lease: None,
-                    created_ms: ev.ts,
-                    updated_ms: ev.ts,
-                    seq: 1,
-                    blocked: false,
-                };
-                out.tasks.insert(ev.task.clone(), task);
-                next_num += 1;
-            }
-            continue;
-        }
+        step(&mut out, &mut next_num, ev);
+    }
+    derive_blocked(&mut out.tasks);
+    out
+}
 
-        // Every other event needs its task to exist (in fold order).
-        let Some(task) = out.tasks.get_mut(&ev.task) else {
-            out.noops.insert(ev.eid.clone());
-            continue;
-        };
-        match apply(task, ev) {
-            Effect::Changed => {
-                task.updated_ms = ev.ts;
-                task.seq += 1;
-            }
-            Effect::Activity => task.updated_ms = ev.ts,
-            Effect::None => {
-                out.noops.insert(ev.eid.clone());
-            }
-        }
-        // A sign of life (ADR-003): any event the holder writes on its task —
-        // applied or not — says when it was last seen. It's derived, like
-        // `blocked`, so it never counts as a change.
-        if let Some(l) = task.lease.as_mut() {
-            if l.is_held_by(&ev.actor, &ev.node) {
-                l.last_seen_ms = ev.ts;
+/// The description as of the content change that left `task_id` at `seq`.
+///
+/// `Some(body)` — that seq happened (`None` inside means the task had no
+/// description yet). `None` — this task never had that seq. Create is seq 1,
+/// and each content change adds one, so the numbers don't skip; a 0 or a gap
+/// is `None`. Within one ledger, timestamps strictly increase, so fold order
+/// is append order and a seq always names the same description (ADR-008).
+pub fn body_at_seq<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
+    task_id: &str,
+    seq: u64,
+) -> Option<Option<String>> {
+    let mut out = Projection::default();
+    let mut next_num: u64 = 1;
+    let mut found = None;
+    for ev in in_order(events) {
+        step(&mut out, &mut next_num, ev);
+        if let Some(task) = out.tasks.get(task_id) {
+            if task.seq == seq {
+                found = Some(task.body.clone());
             }
         }
     }
+    found
+}
 
-    derive_blocked(&mut out.tasks);
-    out
+/// Apply one event. Shared by [`fold`] and [`body_at_seq`] so a past seq is
+/// the same description the fold would have shown.
+fn step(out: &mut Projection, next_num: &mut u64, ev: &Event) {
+    // Only a Create introduces a task, and the first Create for an id wins.
+    if let EventKind::Create {
+        title,
+        priority,
+        body,
+        assignee,
+    } = &ev.kind
+    {
+        if out.tasks.contains_key(&ev.task) {
+            out.noops.insert(ev.eid.clone());
+        } else {
+            let task = Task {
+                id: ev.task.clone(),
+                num: *next_num,
+                title: title.clone(),
+                body: body.clone(),
+                state: State::Todo,
+                priority: *priority,
+                assignee: assignee.clone(),
+                labels: BTreeSet::new(),
+                fields: BTreeMap::new(),
+                relations: Vec::new(),
+                lease: None,
+                created_ms: ev.ts,
+                updated_ms: ev.ts,
+                seq: 1,
+                blocked: false,
+                exported: BTreeMap::new(),
+            };
+            out.tasks.insert(ev.task.clone(), task);
+            *next_num += 1;
+        }
+        return;
+    }
+
+    // Every other event needs its task to exist (in fold order).
+    let Some(task) = out.tasks.get_mut(&ev.task) else {
+        out.noops.insert(ev.eid.clone());
+        return;
+    };
+    match apply(task, ev) {
+        Effect::Changed => {
+            task.updated_ms = ev.ts;
+            task.seq += 1;
+        }
+        Effect::Activity => task.updated_ms = ev.ts,
+        Effect::Recorded => {}
+        Effect::None => {
+            out.noops.insert(ev.eid.clone());
+        }
+    }
+    // A sign of life (ADR-003): any event the holder writes on its task —
+    // applied or not — says when it was last seen. It's derived, like
+    // `blocked`, so it never counts as a change.
+    if let Some(l) = task.lease.as_mut() {
+        if l.is_held_by(&ev.actor, &ev.node) {
+            l.last_seen_ms = ev.ts;
+        }
+    }
 }
 
 /// Apply one (non-Create) event to its task, and say what it did.
@@ -207,6 +247,22 @@ fn apply(t: &mut Task, ev: &Event) -> Effect {
 
         // --- A note is activity, not a content change.
         EventKind::Note { .. } => Effect::Activity,
+
+        // --- Fields (ADR-006): one value each, last writer wins — like the
+        // title, but per field. `None` clears it.
+        EventKind::SetField { field, value } => changed(match value {
+            // Rust note: `insert` hands back the value it replaced, so "did
+            // anything change?" is "was the old value different?".
+            Some(v) => t.fields.insert(field.clone(), v.clone()).as_ref() != Some(v),
+            None => t.fields.remove(field).is_some(),
+        }),
+
+        // --- Bookkeeping (ADR-007): remembered, but not a change to the task.
+        // In fold order, so the latest export of each kind is the one kept.
+        EventKind::Export { to } => {
+            t.exported.insert(to.clone(), ev.ts);
+            Effect::Recorded
+        }
     }
 }
 
@@ -585,6 +641,55 @@ mod tests {
     }
 
     #[test]
+    fn a_seq_names_the_description_at_that_content_change() {
+        let events = [
+            ev(
+                "e1",
+                "T1",
+                1,
+                HUMAN,
+                EventKind::Create {
+                    title: "t".into(),
+                    priority: Priority::None,
+                    body: Some("first".into()),
+                    assignee: None,
+                },
+            ),
+            ev(
+                "e2",
+                "T1",
+                2,
+                A,
+                EventKind::SetBody {
+                    body: "second".into(),
+                },
+            ),
+            ev(
+                "e3",
+                "T1",
+                3,
+                A,
+                EventKind::Note {
+                    text: "still second".into(),
+                },
+            ),
+        ];
+        assert_eq!(
+            body_at_seq(&events, "T1", 0),
+            None,
+            "create starts at seq 1"
+        );
+        assert_eq!(body_at_seq(&events, "T1", 1), Some(Some("first".into())));
+        assert_eq!(body_at_seq(&events, "T1", 2), Some(Some("second".into())));
+        assert_eq!(
+            body_at_seq(&events, "T1", 3),
+            None,
+            "a note doesn't make a seq, so 3 was never this task's seq"
+        );
+        assert_eq!(body_at_seq(&events, "T1", 9), None);
+    }
+
+    #[test]
     fn events_for_unknown_tasks_are_recorded_no_ops() {
         let p = fold(&[
             ev("e1", "T9", 1, A, EventKind::LabelAdd { label: "x".into() }),
@@ -909,6 +1014,65 @@ mod tests {
         assert!(!task(&p, "T1").blocked);
     }
 
+    // ---- fields (ADR-006) and exports (ADR-007) ----
+
+    fn field(eid: &str, task: &str, ts: i64, name: &str, value: Option<&str>) -> Event {
+        let kind = EventKind::SetField {
+            field: name.into(),
+            value: value.map(String::from),
+        };
+        ev(eid, task, ts, HUMAN, kind)
+    }
+
+    #[test]
+    fn a_field_takes_the_last_write_whatever_order_the_file_lists_it_in() {
+        let p = fold(&[
+            create("e1", "T1", 1),
+            field("e3", "T1", 3, "project", Some("billing")),
+            field("e2", "T1", 2, "project", Some("dashboard")),
+            field("e4", "T1", 4, "team", Some("design")),
+        ]);
+        let t = task(&p, "T1");
+        assert_eq!(t.fields.get("project").map(String::as_str), Some("billing"));
+        assert_eq!(t.fields.get("team").map(String::as_str), Some("design"));
+        assert_eq!(t.seq, 4, "each set is a content change");
+    }
+
+    #[test]
+    fn clearing_a_field_removes_it_and_a_repeat_changes_nothing() {
+        let p = fold(&[
+            create("e1", "T1", 1),
+            field("e2", "T1", 2, "project", Some("dashboard")),
+            field("e3", "T1", 3, "project", Some("dashboard")),
+            field("e4", "T1", 4, "project", None),
+            field("e5", "T1", 5, "project", None),
+        ]);
+        assert!(task(&p, "T1").fields.is_empty());
+        assert!(p.noops.contains("e3"), "the same value again: no change");
+        assert!(!p.noops.contains("e4"), "clearing a value is a change");
+        assert!(p.noops.contains("e5"), "clearing what's clear: no change");
+    }
+
+    #[test]
+    fn an_export_is_recorded_without_counting_as_a_change() {
+        let p = fold(&[
+            create("e1", "T1", 1),
+            ev(
+                "e2",
+                "T1",
+                5,
+                HUMAN,
+                EventKind::Export {
+                    to: "notion".into(),
+                },
+            ),
+        ]);
+        let t = task(&p, "T1");
+        assert_eq!(t.exported.get("notion"), Some(&5));
+        assert_eq!((t.seq, t.updated_ms), (1, 1), "bookkeeping, not a change");
+        assert!(!p.noops.contains("e2"), "it did record an export");
+    }
+
     // ---- property: order independence + invariants over random ledgers ----
 
     /// A tiny deterministic PRNG (xorshift64*) — enough for property tests
@@ -941,11 +1105,13 @@ mod tests {
         let states = [State::Todo, State::Doing, State::Done, State::Cancelled];
         let prios = [Priority::None, Priority::Low, Priority::High];
         let labels = ["x", "y"];
+        let fields = ["project", "team"];
+        let values = ["a", "b"];
         (0..len)
             .map(|i| {
                 let ts = rng.below(40) as i64; // lots of same-ms collisions on purpose
                 let who = *rng.pick(&workers);
-                let kind = match rng.below(17) {
+                let kind = match rng.below(20) {
                     0 | 1 => EventKind::Create {
                         title: format!("t{i}"),
                         priority: *rng.pick(&prios),
@@ -998,6 +1164,16 @@ mod tests {
                             reason: None,
                         }
                     }
+                    16 | 17 => {
+                        let value = rng.pick(&values).to_string();
+                        EventKind::SetField {
+                            field: rng.pick(&fields).to_string(),
+                            value: (rng.below(3) > 0).then_some(value),
+                        }
+                    }
+                    18 => EventKind::Export {
+                        to: "notion".into(),
+                    },
                     _ => EventKind::Note { text: "n".into() },
                 };
                 let task = *rng.pick(&tasks); // explicit: Rust 1.89 infers `&[str]` otherwise
@@ -1027,6 +1203,11 @@ mod tests {
             }
             assert!(t.seq >= 1, "seed {seed}");
             assert!(t.updated_ms >= t.created_ms, "seed {seed}");
+            assert!(
+                t.exported.values().all(|&at| at >= t.created_ms),
+                "seed {seed}: {} was exported before it existed",
+                t.id
+            );
             if let Some(l) = &t.lease {
                 assert!(
                     l.since_ms <= l.last_seen_ms,

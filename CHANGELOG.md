@@ -2,6 +2,39 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
+## [0.6.0] - 2026-10-06 — internal release
+
+Descriptions are markdown, with a screenshot or a short recording beside the words ([ADR-008](docs/decisions/adr-008-descriptions-markdown.md)). No new event kind: the description is still the `body` of `create` and `set-body`, so an older binary still reads the store and shows the links as text. New options, a new JSON field, and exit code 5 are why this is 0.6.0.
+
+### Added
+
+- `desc`, `add --body`, and `update --body` store markdown. An image link to a local file is checked, copied into the store's `media/` folder under its SHA-256, and the link rewritten to `media/<sha256>.<ext>`. PNG, JPEG, GIF, WebP, MP4, QuickTime (`.mov`), and WebM are accepted by their leading bytes; anything else — including HEIC, AVIF, and Matroska — is refused. URLs are left as text and never fetched. Image syntax inside code is text. The default caps are 8 MiB for an image and 64 MiB for a video; `[media]` in `config.toml` raises them.
+- `desc --file` reads the description from a file (`--file -` reads stdin). Paths in that file are relative to the file's folder. `desc --base <seq>` merges a concurrent edit by paragraph. A paragraph only one side changed is kept; the same change on both sides is kept once; paragraphs both sides changed differently exit 5 (`stale`) and write nothing.
+- The description stays collaborative: anyone may edit it, holder or not. `--base` is what prevents a silent overwrite.
+- Task objects gain `media` (caption, sha256, mime, bytes, path — one entry per store link). `show` prints each file's path. `show` and `export` warn when a file is missing or its bytes don't match its name; other commands only warn when it's missing. `list --search` matches captions and prose, not the `media/…` path.
+- Notion export copies the files those rows link into `media/` beside the CSV, and says they stay on disk to be added by hand — Notion's importer doesn't upload them. `export --json` adds `media_files`, the files that command copied. A file already there with different bytes stops the export. If recording the export fails, the CSV and the files that command copied are deleted.
+
+### Changed
+
+- Within 0.6.x, JSON fields are only added.
+
+## [0.5.0] - 2026-10-03 — internal release
+
+Organize with fields, upload to Notion: sort tasks by project, team, or whatever you declare, then move them to Notion ([ADR-006](docs/decisions/adr-006-fields.md), [ADR-007](docs/decisions/adr-007-notion-export.md)). Two new event kinds, so everyone sharing a store upgrades together: 0.4.x skips them with a warning.
+
+### Added
+
+- **Fields**: attributes with one value per task — `project`, `team`, or anything declared in the store's `config.toml`, optionally limited to a list of allowed values. Set them with `add` / `update --field name=value`, clear one with `update --clear-field`, filter with `list --field`. An undeclared field or a value off the list is refused with the closest match. `hippo-task fields` shows what's declared, how much each value is used, and values tasks still carry that the config no longer allows.
+- `list --label` filters by label (repeatable). Labels stay free-form.
+- **`hippo-task export notion`** writes the CSV Notion imports: Name, Status, Priority, one column per field, Tags, Assignee, Description, Blocked by, hippo-task ID. With `--out` it writes a new file — never over an existing one — and records the export on each task, so the next export skips them; without it, it's a preview that records nothing. `--field`, `--label`, `--all` and `--again` choose the tasks. Tasks whose row changed since their export — closed ones included — are named, so they can be fixed in Notion; a note alone isn't a change.
+- A field's `display_name` must differ from the export's own columns and from other fields' (ignoring case). A top-level setting in `config.toml` this version doesn't know is a warning, not an error, so an older hippo-task keeps working with a newer config.
+- Task objects gain `fields` and `exported`; `fields --json` and `export --json` print reports (see AGENTS.md).
+
+### Changed
+
+- A ledger line written by a newer hippo-task now says to upgrade, instead of looking damaged.
+- `--help` points agents to `hippo-task guide`, and says exit 4 means held by another worker or starting a closed task.
+
 ## [0.4.1] - 2026-10-02 — internal release
 
 Portable: install and run it on macOS, Linux or Windows, with no Rust needed. Nothing changes for agents — same commands, same JSON.

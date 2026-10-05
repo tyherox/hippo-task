@@ -10,6 +10,7 @@
 //! | 2    | `usage`     | invalid input: bad value, ambiguous id, nothing to do    |
 //! | 3    | `not_found` | no task matches the id                                   |
 //! | 4    | `conflict`  | the task's state refuses the action (leased, closed)     |
+//! | 5    | `stale`     | the description changed since `--base`, and the edits conflict |
 //!
 //! Rust notes: an `enum` whose variants carry data is how Rust says "exactly
 //! one of these failures happened". Callers `match` on it, and the compiler
@@ -28,6 +29,9 @@ pub enum Error {
     /// The task's current state refuses the action (exit 4): someone else
     /// holds the lease, or the task is closed.
     Conflict(String),
+    /// The description changed since the caller's `--base`, and the two edits
+    /// don't merge (exit 5). Nothing was written. The caller re-reads and retries.
+    Stale(String),
     /// An I/O failure (exit 1). `context` says what we were doing, to which
     /// file — so the message is actionable, not just "permission denied".
     Io {
@@ -55,6 +59,7 @@ impl Error {
             Error::Usage(_) => 2,
             Error::NotFound(_) => 3,
             Error::Conflict(_) => 4,
+            Error::Stale(_) => 5,
         }
     }
 
@@ -65,6 +70,7 @@ impl Error {
             Error::Usage(_) => "usage",
             Error::NotFound(_) => "not_found",
             Error::Conflict(_) => "conflict",
+            Error::Stale(_) => "stale",
         }
     }
 }
@@ -72,7 +78,7 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Usage(msg) | Error::Conflict(msg) => f.write_str(msg),
+            Error::Usage(msg) | Error::Conflict(msg) | Error::Stale(msg) => f.write_str(msg),
             Error::NotFound(id) => write!(f, "no task matches '{id}' (see `hippo-task list`)"),
             Error::Io { context, source } => write!(f, "{context}: {source}"),
         }

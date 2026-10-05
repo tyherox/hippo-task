@@ -21,6 +21,7 @@
 //!
 //! Deferred (staging rule): snapshots/compaction, other adapters (SQLite, sync).
 
+use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::model::Event;
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -111,6 +112,29 @@ impl Store {
     /// Where the ledger file lives.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The store folder — the ledger's folder, where `config.toml` lives too.
+    pub fn folder(&self) -> &Path {
+        &self.folder
+    }
+
+    /// This store's settings (ADR-006). A store without a `config.toml` has
+    /// an empty one, so this only fails on a file that can't be read or parsed.
+    /// Settings this version doesn't know are reported as warnings — so load
+    /// it once per command.
+    pub fn config(&self) -> Result<Config> {
+        let config = Config::load(&self.folder)?;
+        for warning in &config.warnings {
+            self.warn(warning);
+        }
+        Ok(config)
+    }
+
+    /// Report something worth knowing that isn't an error, through the same
+    /// channel as skipped lines — so `--json` mode turns it into a JSON line.
+    pub fn warn(&self, message: &str) {
+        (self.on_warning)(message);
     }
 
     /// Read every event under a shared lock. A missing ledger is an empty one —
@@ -242,11 +266,14 @@ impl Store {
             match serde_json::from_slice::<Event>(line) {
                 Ok(event) => ledger.events.push(event),
                 Err(e) => {
-                    let msg = format!(
-                        "{}:{}: skipped an unreadable line ({e})",
-                        self.path.display(),
-                        index + 1
-                    );
+                    // An event kind this version doesn't know was written by a
+                    // newer hippo-task — say so, rather than "unreadable".
+                    let what = if e.to_string().contains("unknown variant") {
+                        "skipped an event written by a newer hippo-task — upgrade hippo-task to read it"
+                    } else {
+                        "skipped an unreadable line"
+                    };
+                    let msg = format!("{}:{}: {what} ({e})", self.path.display(), index + 1);
                     (self.on_warning)(&msg);
                     ledger.warnings.push(msg);
                 }

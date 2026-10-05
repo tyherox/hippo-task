@@ -27,6 +27,8 @@ Rules:
 - Tasks live where a person chose with `hippo-task init`, and every command finds them from any folder in the project. If a command says there's no task store, stop and tell the person — don't run `init` yourself.
 - Never edit a ledger (`ledger.jsonl`) by hand: it's append-only and the CLI is its only writer.
 - Before you `add` a task, search for the most distinctive term in it — a function, a file, an error message: `hippo-task list --json --search token_refresh`. If a task already covers it, add a note there instead. If you find you're working on a duplicate, mark it: `hippo-task update 8 --duplicate-of 5 --json` links it to the original and cancels it.
+- Some projects declare **fields** — attributes with one value per task, like `project` or `team`. Run `hippo-task fields --json` to see them and their allowed values; set them with `--field name=value` on `add` or `update`, and find tasks with `hippo-task list --json --field name=value`. A field that isn't declared, or a value off its list, exits 2 with the closest match: pick from the list — never invent a value. Labels stay free-form.
+- Descriptions are markdown and may contain image links to files in the store: `![caption](media/<sha256>.<ext>)`. `hippo-task desc 3 --file note.md` (or `hippo-task desc 3 --file -` for stdin) copies local images and video in and rewrites those links; `add --body` and `update --body` take the same markdown. `hippo-task desc 3 --base <seq>` passes the `seq` from your last read: if the description hasn't changed, your text is written; if it has, the two edits merge by paragraph. Paragraphs both sides rewrote differently exit 5 (`stale`) and write nothing — re-read the task and redo the edit. Without `--base`, the text replaces the description. Anyone may edit it, whether or not they hold the task.
 - Never put secrets or personal data in titles, notes, or descriptions — they are stored in cleartext, forever.
 
 ### Exit codes
@@ -38,26 +40,30 @@ Rules:
 | 2 | `usage` | invalid input (bad value, ambiguous id, nothing to do), or no task store yet | fix the command; don't retry it unchanged. No task store: tell the human — they choose where tasks live with `hippo-task init` |
 | 3 | `not_found` | no task matches the id | re-list; the number may be wrong |
 | 4 | `conflict` | held by another worker — or, for `start`, the task is closed; or an agent reclaiming without `--force` | pick another task — don't force |
+| 5 | `stale` | the description changed since `--base`, and those paragraphs conflict | re-read the task and redo the edit — nothing was written |
 
 Closed tasks (`done` or `cancelled`): only `start` refuses them. `hippo-task update 3 --state todo` reopens one; notes, labels, title, and priority edits are accepted on a closed task; `hippo-task done 3` on a task that's already done is recorded but changes nothing (exit 0, `applied: false` in its history), and on a cancelled task it completes it (no refusal).
 
 ### JSON shapes
 
-With `--json`, stdout is exactly one JSON document. `guide --json` prints `{"guide": "…"}` — this section, as text. `init --json`, for scripts, prints `{"project", "store": {"kind", "path"}, "pointer", "created", "git": {"repository", "kept_out"}}`. Every single-task command (`add`, `update`, `start`, `release`, `note`, `desc`, `done`, `show`) prints a **task object**; `list`, `release --all`, and `reclaim` print an array of them (for the last two, the tasks they handed back — possibly none).
+With `--json`, stdout is exactly one JSON document. `guide --json` prints `{"guide": "…"}` — this section, as text. `init --json`, for scripts, prints `{"project", "store": {"kind", "path"}, "pointer", "created", "git": {"repository", "kept_out"}}`. `fields --json` prints `{"config", "fields": [{"field", "display_name", "values", "counts": [{"value", "open", "total"}]}], "strays": [{"num", "id", "field", "value"}]}` — `values` is `null` when any text is allowed; `strays` are values tasks carry that the config doesn't allow. `export notion --out FILE --json` prints `{"file", "exported", "changed", "media_files"}`: the file written (`null` when nothing was new), the task objects in it, the ones left out because they changed since an earlier export, and `media_files` — the files this command copied into `media/` beside the CSV. A file already there with the same bytes is left alone and omitted. Every single-task command (`add`, `update`, `start`, `release`, `note`, `desc`, `done`, `show`) prints a **task object**; `list`, `release --all`, and `reclaim` print an array of them (for the last two, the tasks they handed back — possibly none).
 
 Task object:
 
 - `id` — the ULID; the permanent identifier
 - `num` — the friendly number (`#3`); stable on one machine
-- `title`; `body` — the description, or null
+- `title`; `body` — the description (markdown, possibly with `media/…` image links), or null
+- `media` — one entry per store image or video link, in reading order: `{"caption", "sha256", "mime", "bytes", "path"}`. `bytes` is null when the store doesn't have the file; `path` is where the file is on this machine. A `http:` or `https:` image stays in `body` and is not an entry. `[]` when the description links no store file.
 - `state` — `todo` | `doing` | `done` | `cancelled`
 - `priority` — `none` | `low` | `med` | `high` | `urgent`
 - `assignee` — who *should* own it (durable intent, not a claim), or null
 - `labels` — sorted array of strings
+- `fields` — the task's declared fields, one value each: `{"project": "dashboard"}`, or `{}`
 - `relations` — array of `{"rel": "blocked-by" | "duplicate-of", "task": "<id>"}`; only `blocked-by` affects `blocked`
 - `blocked` — derived: true while the task is open and any blocked-by task is still open
 - `lease` — who holds the task: null, or `{"holder", "node", "expires_ms", "active", "since_ms", "last_seen_ms"}`. `holder` + `node` are the worker; `expires_ms` is null for a claim (it holds until released, the task closes, or someone reclaims it) or unix millis for a timed lease from a 0.1.x ledger; `active` is whether it was in force when the command ran; `since_ms` is when this worker's hold began; `last_seen_ms` is the holder's latest event on the task — its last sign of life
 - `created_ms`, `updated_ms` — unix millis; `seq` — how many content changes the task has had
+- `exported` — where the task was uploaded and when: `{"notion": <unix millis>}`, or `{}`. Bookkeeping: an export changes neither `seq` nor `updated_ms`
 
 `show --json` adds `events`: the task's full history in order. Each event is exactly the ledger line — `eid`, `task`, `ts`, `actor`, `node`, `type`, `data` — plus `applied`: false means it was recorded but had no effect (a rejected claim, a repeated change).
 
@@ -65,7 +71,7 @@ Task object:
 
 On stderr, `--json` mode writes JSON lines: zero or more `{"warning": "…"}`, then — on failure — one error object with the fields `error` (the kind), `message`, and `exit_code`, e.g. `{"error":"conflict","message":"#3 is held by agent:codex@cx (quiet 7m) — back off and pick another task","exit_code":4}`.
 
-Stability: within 0.4.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
+Stability: within 0.6.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
 
 ## B. Changing this crate
 

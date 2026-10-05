@@ -91,6 +91,7 @@ fn exit_codes_are_documented_exactly() {
         Error::Usage(String::new()),
         Error::NotFound(String::new()),
         Error::Conflict(String::new()),
+        Error::Stale(String::new()),
     ];
     for e in &every_error {
         let row = format!("| {} | `{}`", e.exit_code(), e.kind());

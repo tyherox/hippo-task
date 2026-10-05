@@ -7,6 +7,7 @@ mod common;
 
 use common::TempDir;
 use hippo_task::error::Error;
+use hippo_task::media::Anchor;
 use hippo_task::model::{Event, EventKind, Priority, RelType, Relation, State, Task};
 use hippo_task::ops::{self, Changes, Ctx, Filter, NewTask, ReclaimTarget, Sort};
 use hippo_task::store::Store;
@@ -32,6 +33,7 @@ fn new_task(title: &str) -> NewTask {
         body: None,
         assignee: None,
         labels: vec![],
+        fields: vec![],
     }
 }
 
@@ -711,7 +713,7 @@ fn empty_input_is_a_usage_error() {
         Err(Error::Usage(_))
     ));
     assert!(matches!(
-        ops::describe(&store, &h, "1", "  "),
+        ops::describe(&store, &h, "1", "  ", &Anchor::Cwd, None),
         Err(Error::Usage(_))
     ));
     assert!(matches!(

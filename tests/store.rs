@@ -238,3 +238,30 @@ fn the_first_write_in_a_new_folder_is_flushed_without_warnings() {
     assert!(seen.borrow().is_empty(), "{:?}", seen.borrow());
     assert_eq!(store.read().unwrap().events.len(), 1);
 }
+
+#[test]
+fn a_line_from_a_newer_hippo_task_says_to_upgrade_instead_of_looking_damaged() {
+    // A teammate on a newer version writes an event kind this one doesn't know.
+    let dir = TempDir::new("store-newer");
+    let store = Store::new(dir.path()).on_warning(|_| {});
+    store
+        .begin()
+        .unwrap()
+        .commit(vec![event("E1", "T1", 1)])
+        .unwrap();
+    let mut file = OpenOptions::new().append(true).open(store.path()).unwrap();
+    writeln!(
+        file,
+        r#"{{"eid":"E2","task":"T1","ts":2,"actor":"agent:x","node":"n","type":"teleport","data":{{}}}}"#
+    )
+    .unwrap();
+
+    let ledger = store.read().unwrap();
+    assert_eq!(ledger.events.len(), 1, "the known event still reads");
+    assert_eq!(ledger.warnings.len(), 1, "{:?}", ledger.warnings);
+    assert!(
+        ledger.warnings[0].contains("newer hippo-task"),
+        "{:?}",
+        ledger.warnings
+    );
+}

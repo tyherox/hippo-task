@@ -12,12 +12,18 @@
 //!
 //! Nothing here reads the clock: `Ctx::now_ms` is passed in, so tests control time.
 
+use crate::config::{Config, Field};
 use crate::error::{Error, Result};
 use crate::fold::{self, Projection};
+use crate::media::{self, Anchor};
 use crate::model::{Event, EventKind, Lease, Priority, RelType, State, Task};
-use crate::render::{hold_status, who};
+use crate::render::{self, hold_status, who};
 use crate::store::{Store, Tx};
-use std::collections::BTreeMap;
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
 use ulid::Ulid;
 
 /// Shortest id suffix accepted, so a stray `hippo-task done A` can't hit a random task.
@@ -94,9 +100,11 @@ pub struct NewTask {
     pub body: Option<String>,
     pub assignee: Option<String>,
     pub labels: Vec<String>,
+    /// Declared fields to set, as `(name, value)` (ADR-006; see [`parse_field`]).
+    pub fields: Vec<(String, String)>,
 }
 
-/// Create a task (plus one event per label, in the same transaction).
+/// Create a task (plus one event per label and per field, in the same transaction).
 pub fn add(store: &Store, ctx: &Ctx, new: NewTask) -> Result<Task> {
     let title = required("title", &new.title)?;
     let labels = new
@@ -105,7 +113,17 @@ pub fn add(store: &Store, ctx: &Ctx, new: NewTask) -> Result<Task> {
         .map(|l| required("label", l))
         .collect::<Result<Vec<_>>>()?;
     let assignee = optional("assignee", new.assignee.as_deref())?;
-    let body = optional("description", new.body.as_deref())?;
+    // Images are copied before the ledger is locked, so a large file doesn't
+    // hold up other writers (ADR-008).
+    let body = match new.body.as_deref() {
+        Some(text) => Some(stored_body(store, text, &Anchor::Cwd)?),
+        None => None,
+    };
+    let fields = if new.fields.is_empty() {
+        Vec::new() // no fields, no need to read the config
+    } else {
+        checked_fields(&store.config()?, &new.fields)?
+    };
 
     let id = Ulid::new().to_string();
     let mut tx = store.begin()?;
@@ -119,8 +137,54 @@ pub fn add(store: &Store, ctx: &Ctx, new: NewTask) -> Result<Task> {
     for label in labels {
         events.push(ctx.event(&mut tx, &id, EventKind::LabelAdd { label }));
     }
+    for (field, value) in fields {
+        let set = EventKind::SetField {
+            field,
+            value: Some(value),
+        };
+        events.push(ctx.event(&mut tx, &id, set));
+    }
     let ledger = tx.commit(events)?;
     task_in(fold::fold(&ledger.events), &id)
+}
+
+/// One `--field` argument, `name=value`, split and trimmed.
+///
+/// Rust note: `split_once` splits at the *first* `=`, so a value may contain
+/// one itself (`--field formula=a=b`).
+pub fn parse_field(arg: &str) -> Result<(String, String)> {
+    let Some((name, value)) = arg.split_once('=') else {
+        return Err(Error::Usage(format!(
+            "--field takes name=value, like project=dashboard — got `{arg}`"
+        )));
+    };
+    let (name, value) = (name.trim(), value.trim());
+    if name.is_empty() {
+        return Err(Error::Usage(format!(
+            "`{arg}` names no field — --field takes name=value, like project=dashboard"
+        )));
+    }
+    if value.is_empty() {
+        return Err(Error::Usage(format!(
+            "`{arg}` has no value — to clear a field, use --clear-field {name}"
+        )));
+    }
+    Ok((name.to_string(), value.to_string()))
+}
+
+/// Fields to set, checked against the config (ADR-006): each one declared,
+/// each value allowed, and none set twice — a field holds one value.
+fn checked_fields(config: &Config, fields: &[(String, String)]) -> Result<Vec<(String, String)>> {
+    let mut seen = BTreeSet::new();
+    for (name, value) in fields {
+        if !seen.insert(name.as_str()) {
+            return Err(Error::Usage(format!(
+                "{name} is set twice — a field holds one value"
+            )));
+        }
+        config.check(name, value)?;
+    }
+    Ok(fields.to_vec())
 }
 
 // --------------------------------------------------------------- update
@@ -143,6 +207,10 @@ pub struct Changes {
     /// Mark this task a duplicate of another (ADR-004): link it to the
     /// original and cancel it. Closing etiquette applies, as for `--state`.
     pub duplicate_of: Option<String>,
+    /// Declared fields to set, as `(name, value)` (ADR-006).
+    pub fields: Vec<(String, String)>,
+    /// Fields to clear, by name.
+    pub clear_fields: Vec<String>,
 }
 
 impl Changes {
@@ -158,6 +226,8 @@ impl Changes {
             && self.block.is_empty()
             && self.unblock.is_empty()
             && self.duplicate_of.is_none()
+            && self.fields.is_empty()
+            && self.clear_fields.is_empty()
     }
 }
 
@@ -181,7 +251,10 @@ pub fn update(store: &Store, ctx: &Ctx, id: &str, changes: Changes) -> Result<Ta
     }
     let title = optional("title", changes.title.as_deref())?;
     let assignee = optional("assignee", changes.assignee.as_deref())?;
-    let body = optional("description", changes.body.as_deref())?;
+    let body = match changes.body.as_deref() {
+        Some(text) => Some(stored_body(store, text, &Anchor::Cwd)?),
+        None => None,
+    };
     let label_add = changes
         .label_add
         .iter()
@@ -192,10 +265,42 @@ pub fn update(store: &Store, ctx: &Ctx, id: &str, changes: Changes) -> Result<Ta
         .iter()
         .map(|l| required("label", l))
         .collect::<Result<Vec<_>>>()?;
+    let clear_fields = changes
+        .clear_fields
+        .iter()
+        .map(|f| required("field", f))
+        .collect::<Result<Vec<_>>>()?;
+    let config = if changes.fields.is_empty() && clear_fields.is_empty() {
+        None // no fields involved, no need to read the config
+    } else {
+        Some(store.config()?)
+    };
+    let set_fields = match &config {
+        Some(config) if !changes.fields.is_empty() => checked_fields(config, &changes.fields)?,
+        _ => Vec::new(),
+    };
+    if let Some(name) = clear_fields
+        .iter()
+        .find(|name| set_fields.iter().any(|(set, _)| set == *name))
+    {
+        return Err(Error::Usage(format!(
+            "{name} is both set and cleared — pick one"
+        )));
+    }
 
     let mut tx = store.begin()?;
     let proj = fold::fold(tx.events());
     let task = resolve(&proj.tasks, id)?.clone();
+    // Clearing works on any field the task carries — even one the config no
+    // longer declares, so old values can be cleaned up. Otherwise the name
+    // must be declared: a typo mustn't silently clear nothing.
+    if let Some(config) = &config {
+        for name in &clear_fields {
+            if !task.fields.contains_key(name) {
+                config.declared(name)?;
+            }
+        }
+    }
     if let Some(state) = changes.state {
         let action = if state.is_closed() {
             "close it"
@@ -240,6 +345,19 @@ pub fn update(store: &Store, ctx: &Ctx, id: &str, changes: Changes) -> Result<Ta
         label_remove
             .into_iter()
             .map(|label| EventKind::LabelRemove { label }),
+    );
+    kinds.extend(
+        set_fields
+            .into_iter()
+            .map(|(field, value)| EventKind::SetField {
+                field,
+                value: Some(value),
+            }),
+    );
+    kinds.extend(
+        clear_fields
+            .into_iter()
+            .map(|field| EventKind::SetField { field, value: None }),
     );
     kinds.extend(block.into_iter().map(|task| EventKind::Relate {
         rel: RelType::BlockedBy,
@@ -297,7 +415,7 @@ pub fn start(store: &Store, ctx: &Ctx, id: &str) -> Result<Task> {
         },
     );
     let ledger = tx.commit(vec![attempt, doing])?;
-    task_in(fold::fold(&ledger.events), &task_id)
+    task_in(fold::fold(&ledger.events), &task_id).map(|task| present(store, task))
 }
 
 /// What [`release`] did.
@@ -334,7 +452,7 @@ pub fn release(store: &Store, ctx: &Ctx, id: &str) -> Result<Released> {
     }
     events.push(ctx.event(&mut tx, &task_id, EventKind::Release));
     let ledger = tx.commit(events)?;
-    let task = task_in(fold::fold(&ledger.events), &task_id)?;
+    let task = present(store, task_in(fold::fold(&ledger.events), &task_id)?);
     Ok(Released { task, released })
 }
 
@@ -366,7 +484,7 @@ pub fn release_all(store: &Store, ctx: &Ctx) -> Result<Vec<Task>> {
         events.push(ctx.event(&mut tx, &t.id, EventKind::Release));
     }
     let ledger = tx.commit(events)?;
-    tasks_in(fold::fold(&ledger.events), &held)
+    tasks_in(fold::fold(&ledger.events), &held).map(|tasks| present_all(store, tasks))
 }
 
 /// What [`reclaim`] takes back.
@@ -453,6 +571,7 @@ pub fn reclaim(
                 .tasks
                 .remove(&t.id)
                 .ok_or_else(|| Error::NotFound(t.id.clone()))?;
+            media::warn_about(store, std::slice::from_ref(&task), false);
             Ok(Reclaimed { task, from })
         })
         .collect()
@@ -468,7 +587,7 @@ pub fn done(store: &Store, ctx: &Ctx, id: &str, force: bool) -> Result<Task> {
     guard_holder(&task, ctx, force, "close it")?;
     let event = ctx.event(&mut tx, &task.id, EventKind::Complete);
     let ledger = tx.commit(vec![event])?;
-    task_in(fold::fold(&ledger.events), &task.id)
+    task_in(fold::fold(&ledger.events), &task.id).map(|task| present(store, task))
 }
 
 /// Append a note to the task's history.
@@ -477,10 +596,101 @@ pub fn note(store: &Store, ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     append_one(store, ctx, id, EventKind::Note { text })
 }
 
-/// Set the task's description.
-pub fn describe(store: &Store, ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
-    let body = required("description", text)?;
-    append_one(store, ctx, id, EventKind::SetBody { body })
+/// Set the task's description (ADR-008). `anchor` is where relative image
+/// paths resolve. `base` is the task's `seq` from the caller's last read:
+/// when the description has moved on, the three versions merge by paragraph.
+/// Without `base`, the text replaces the description. No holder check —
+/// the description stays collaborative, like the title.
+pub fn describe(
+    store: &Store,
+    ctx: &Ctx,
+    id: &str,
+    markdown: &str,
+    anchor: &Anchor,
+    base: Option<u64>,
+) -> Result<Task> {
+    let submitted = stored_body(store, markdown, anchor)?;
+    let mut tx = store.begin()?;
+    let task = resolve(&fold::fold(tx.events()).tasks, id)?.clone();
+    let body = match base {
+        None => submitted,
+        Some(base_seq) => merged_body(tx.events(), &task, base_seq, submitted)?,
+    };
+    let event = ctx.event(&mut tx, &task.id, EventKind::SetBody { body });
+    let ledger = tx.commit(vec![event])?;
+    task_in(fold::fold(&ledger.events), &task.id)
+}
+
+/// Normalize, copy images, and refuse an empty result. The config read is
+/// what supplies the size caps; it does not take the ledger lock.
+fn stored_body(store: &Store, markdown: &str, anchor: &Anchor) -> Result<String> {
+    let limits = store.config()?.media;
+    finish_body(media::ingest(store, markdown, anchor, &limits)?)
+}
+
+fn finish_body(text: String) -> Result<String> {
+    if text.trim().is_empty() {
+        Err(Error::Usage("description must not be empty".into()))
+    } else {
+        Ok(text)
+    }
+}
+
+fn merged_body(events: &[Event], task: &Task, base: u64, submitted: String) -> Result<String> {
+    if base > task.seq {
+        return Err(Error::Usage(format!(
+            "seq {base} is past {}'s current seq {} — re-read the task and pass its seq",
+            task.handle(),
+            task.seq
+        )));
+    }
+    if base == task.seq {
+        return Ok(submitted);
+    }
+    let historical = fold::body_at_seq(events, &task.id, base).ok_or_else(|| {
+        Error::Usage(format!(
+            "seq {base} doesn't name a description of {} (a task starts at seq 1; this one is at seq {})",
+            task.handle(),
+            task.seq
+        ))
+    })?;
+    let base_paras = media::paragraphs(historical.as_deref().unwrap_or(""));
+    let ours = media::paragraphs(&submitted);
+    let theirs = media::paragraphs(task.body.as_deref().unwrap_or(""));
+    match media::merge(&base_paras, &ours, &theirs) {
+        Ok(paras) => finish_body(paras.join("\n\n")),
+        Err(conflicts) => Err(Error::Stale(stale_message(task, base, &conflicts))),
+    }
+}
+
+fn stale_message(task: &Task, base: u64, conflicts: &[media::Conflict]) -> String {
+    let mut msg = format!(
+        "{}'s description changed since seq {base} — these paragraphs conflict, so nothing was written:",
+        task.handle()
+    );
+    for conflict in conflicts {
+        msg.push_str(&format!(
+            "\n  submitted: \"{}\"\n  current: \"{}\"",
+            clip_conflict(&conflict.submitted),
+            clip_conflict(&conflict.current)
+        ));
+    }
+    msg.push_str(&format!(
+        "\nre-read the task (hippo-task show {}) and redo the edit",
+        task.num
+    ));
+    msg
+}
+
+fn clip_conflict(text: &str) -> String {
+    let flat = text.replace('\n', " ");
+    let mut chars = flat.chars();
+    let short: String = chars.by_ref().take(80).collect();
+    if chars.next().is_some() {
+        format!("{short}…")
+    } else {
+        short
+    }
 }
 
 fn append_one(store: &Store, ctx: &Ctx, id: &str, kind: EventKind) -> Result<Task> {
@@ -488,7 +698,7 @@ fn append_one(store: &Store, ctx: &Ctx, id: &str, kind: EventKind) -> Result<Tas
     let task_id = resolve(&fold::fold(tx.events()).tasks, id)?.id.clone();
     let event = ctx.event(&mut tx, &task_id, kind);
     let ledger = tx.commit(vec![event])?;
-    task_in(fold::fold(&ledger.events), &task_id)
+    task_in(fold::fold(&ledger.events), &task_id).map(|task| present(store, task))
 }
 
 // ------------------------------------------------------------ list/show
@@ -523,6 +733,10 @@ pub struct Filter {
     /// Only tasks whose title or description contains every one of these,
     /// ignoring case — the check before filing a new task (ADR-004).
     pub search: Vec<String>,
+    /// Only tasks with every one of these field values, as `(name, value)` (ADR-006).
+    pub fields: Vec<(String, String)>,
+    /// Only tasks with every one of these labels.
+    pub labels: Vec<String>,
     pub sort: Sort,
 }
 
@@ -534,11 +748,18 @@ pub fn list(store: &Store, ctx: &Ctx, filter: &Filter) -> Result<Vec<Task>> {
         .iter()
         .map(|term| required("search text", term).map(|t| t.to_lowercase()))
         .collect::<Result<Vec<_>>>()?;
+    let config = if filter.fields.is_empty() {
+        Config::default() // no field filters, no need to read the config
+    } else {
+        store.config()?
+    };
+    let labels = checked_filters(store, &config, &filter.fields, &filter.labels)?;
     let ledger = store.read()?;
     let mut tasks: Vec<Task> = fold::fold(&ledger.events)
         .tasks
         .into_values()
         .filter(|t| terms.iter().all(|term| mentions(t, term)))
+        .filter(|t| carries(t, &filter.fields, &labels))
         .filter(|t| filter.state.is_none_or(|s| t.state == s))
         .filter(|t| {
             !filter.mine
@@ -558,16 +779,52 @@ pub fn list(store: &Store, ctx: &Ctx, filter: &Filter) -> Result<Vec<Task>> {
             tasks.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.num.cmp(&b.num)))
         }
     }
+    // Present only: list doesn't re-hash. A missing file is a warning.
+    media::warn_about(store, &tasks, false);
     Ok(tasks)
+}
+
+/// Check `--field` and `--label` filters; returns the labels, trimmed. A
+/// field must be declared, and named once — it holds one value, so two could
+/// never both match. A value off its list still filters — old tasks may carry
+/// it — but says so as a warning, so a typo doesn't look like "no tasks".
+fn checked_filters(
+    store: &Store,
+    config: &Config,
+    fields: &[(String, String)],
+    labels: &[String],
+) -> Result<Vec<String>> {
+    let mut seen = BTreeSet::new();
+    for (name, value) in fields {
+        if !seen.insert(name.as_str()) {
+            return Err(Error::Usage(format!(
+                "{name} is filtered twice — a field holds one value, so no task could match both"
+            )));
+        }
+        if let Some(warning) = config.check_filter(name, value)? {
+            store.warn(&warning);
+        }
+    }
+    labels.iter().map(|l| required("label", l)).collect()
+}
+
+/// Does the task carry every one of these field values and labels?
+fn carries(t: &Task, fields: &[(String, String)], labels: &[String]) -> bool {
+    fields
+        .iter()
+        .all(|(name, value)| t.fields.get(name) == Some(value))
+        && labels.iter().all(|label| t.labels.contains(label))
 }
 
 /// Does the task's title or description contain `term` (already lowercased)?
 /// A plain substring, not a pattern: what an agent types is what it finds.
+/// Image destinations are skipped, so `media` doesn't match every file; the
+/// caption and the prose still match (ADR-008).
 fn mentions(t: &Task, term: &str) -> bool {
     t.title.to_lowercase().contains(term)
         || t.body
             .as_deref()
-            .is_some_and(|body| body.to_lowercase().contains(term))
+            .is_some_and(|body| media::searchable(body).contains(term))
 }
 
 /// Ready to pick up: open, not blocked, and nobody holds it. That includes
@@ -609,11 +866,360 @@ pub fn show(store: &Store, id: &str) -> Result<Detail> {
             applied: !proj.noops.contains(&e.eid),
         })
         .collect();
+    // show re-reads each file and warns when the bytes don't match the name.
+    media::warn_about(store, std::slice::from_ref(&task), true);
     Ok(Detail {
         task,
         history,
         all: proj.tasks,
     })
+}
+
+// --------------------------------------------------------------- fields
+
+/// How many tasks carry one value of a field: the open ones, and all of them.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ValueCount {
+    pub value: String,
+    pub open: usize,
+    pub total: usize,
+}
+
+/// A value a task carries that the config doesn't allow — any more, usually.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Stray {
+    pub num: u64,
+    pub id: String,
+    pub field: String,
+    pub value: String,
+}
+
+/// What `hippo-task fields` reports (ADR-006).
+#[derive(Debug, Clone)]
+pub struct FieldsReport {
+    pub config: Config,
+    /// For each declared field, in `config.fields` order: its values and their
+    /// use — every allowed value for a listed field, the values in use otherwise.
+    pub counts: Vec<Vec<ValueCount>>,
+    pub strays: Vec<Stray>,
+}
+
+/// The declared fields, how much each value is used, and any strays.
+pub fn fields(store: &Store) -> Result<FieldsReport> {
+    let config = store.config()?;
+    let tasks: Vec<Task> = fold::fold(&store.read()?.events)
+        .tasks
+        .into_values()
+        .collect();
+    let counts = config
+        .fields
+        .iter()
+        .map(|f| {
+            let values: Vec<String> = match &f.values {
+                Some(list) => list.clone(),
+                // Any text: the distinct values in use, sorted (a BTreeSet does both).
+                None => tasks
+                    .iter()
+                    .filter_map(|t| t.fields.get(&f.name).cloned())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+            };
+            values
+                .into_iter()
+                .map(|value| {
+                    let carrying: Vec<&Task> = tasks
+                        .iter()
+                        .filter(|t| t.fields.get(&f.name) == Some(&value))
+                        .collect();
+                    let open = carrying.iter().filter(|t| !t.state.is_closed()).count();
+                    ValueCount {
+                        value,
+                        open,
+                        total: carrying.len(),
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let mut strays: Vec<Stray> = tasks
+        .iter()
+        .flat_map(|t| {
+            t.fields
+                .iter()
+                .filter(|(name, value)| match config.field(name) {
+                    None => true, // the field isn't declared (any more)
+                    Some(f) => f.values.as_ref().is_some_and(|list| !list.contains(value)),
+                })
+                .map(|(name, value)| Stray {
+                    num: t.num,
+                    id: t.id.clone(),
+                    field: name.clone(),
+                    value: value.clone(),
+                })
+        })
+        .collect();
+    strays.sort_by(|a, b| a.num.cmp(&b.num).then(a.field.cmp(&b.field)));
+    Ok(FieldsReport {
+        config,
+        counts,
+        strays,
+    })
+}
+
+// --------------------------------------------------------------- export
+
+/// Where an export goes (ADR-007). Notion is the first; others can follow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Destination {
+    /// CSV for Notion's importer (Import, or Merge with CSV).
+    Notion,
+}
+
+impl Destination {
+    /// The name recorded on export events and in each task's `exported`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Destination::Notion => "notion",
+        }
+    }
+}
+
+/// Which tasks an export takes. By default: open tasks not exported there yet.
+#[derive(Debug, Clone, Default)]
+pub struct ExportSelection {
+    /// Only tasks with every one of these field values.
+    pub fields: Vec<(String, String)>,
+    /// Only tasks with every one of these labels.
+    pub labels: Vec<String>,
+    /// Closed tasks too.
+    pub all: bool,
+    /// Tasks already exported there, too.
+    pub again: bool,
+}
+
+/// What [`export`] did.
+#[derive(Debug, Clone)]
+pub struct Exported {
+    /// The CSV: a header, then one row per task.
+    pub csv: String,
+    /// The tasks in it, in order — as they are after the export was recorded.
+    pub tasks: Vec<Task>,
+    /// Tasks left out because they were exported before but changed since —
+    /// to fix in the destination by hand, or to export again with `again`.
+    pub changed: Vec<Task>,
+    /// The file written: `None` for a preview, or when there was nothing new.
+    pub file: Option<PathBuf>,
+    /// Files this command copied beside the CSV. One already there with the
+    /// same bytes is left alone and is not listed (ADR-008).
+    pub media_files: Vec<PathBuf>,
+}
+
+/// Export tasks for another tool (ADR-007). With `out`, write that file —
+/// never over an existing one — and record an `export` event on each task, so
+/// the next export skips them. Without `out` it's a preview: nothing recorded.
+pub fn export(
+    store: &Store,
+    ctx: &Ctx,
+    to: Destination,
+    selection: &ExportSelection,
+    out: Option<&Path>,
+) -> Result<Exported> {
+    let config = store.config()?;
+    let labels = checked_filters(store, &config, &selection.fields, &selection.labels)?;
+    let Some(out) = out else {
+        // A preview: read, choose, render — record nothing.
+        let events = store.read()?.events;
+        let proj = fold::fold(&events);
+        let (picked, changed) = choose(&events, &proj, selection, &labels, to, &config.fields);
+        let csv = render::notion_csv(&picked, &proj.tasks, &config.fields);
+        media::warn_about(store, &picked, true);
+        media::warn_about(store, &changed, true);
+        return Ok(Exported {
+            csv,
+            tasks: picked,
+            changed,
+            file: None,
+            media_files: Vec::new(),
+        });
+    };
+    // For real: choose under the lock, so what's recorded is what was written.
+    let mut tx = store.begin()?;
+    let proj = fold::fold(tx.events());
+    let (picked, changed) = choose(tx.events(), &proj, selection, &labels, to, &config.fields);
+    let csv = render::notion_csv(&picked, &proj.tasks, &config.fields);
+    media::warn_about(store, &picked, true);
+    media::warn_about(store, &changed, true);
+    if picked.is_empty() {
+        return Ok(Exported {
+            csv,
+            tasks: picked,
+            changed,
+            file: None, // nothing new: no empty file to import by mistake
+            media_files: Vec::new(),
+        });
+    }
+    // Refuse an existing CSV before copying, so a refusal leaves no new files.
+    if out.exists() {
+        return Err(Error::Usage(format!(
+            "{} already exists — export to a new file (and if that one hasn't been imported yet, import it first)",
+            out.display()
+        )));
+    }
+    let markdowns: Vec<&str> = picked.iter().filter_map(|t| t.body.as_deref()).collect();
+    let dest_dir = out.parent().unwrap_or(Path::new(".")).join("media");
+    let copied = media::copy_referenced(store.folder(), &markdowns, &dest_dir)?;
+    // The file first: if it can't be written, nothing is marked exported.
+    if let Err(error) = write_new_file(out, &csv) {
+        return Err(unrecorded(out, &copied, error));
+    }
+    let events: Vec<Event> = picked
+        .iter()
+        .map(|t| {
+            let kind = EventKind::Export {
+                to: to.as_str().to_string(),
+            };
+            ctx.event(&mut tx, &t.id, kind)
+        })
+        .collect();
+    let ledger = tx.commit(events).map_err(|e| unrecorded(out, &copied, e))?;
+    let tasks = tasks_in(fold::fold(&ledger.events), &picked)?;
+    Ok(Exported {
+        csv,
+        tasks,
+        changed,
+        file: Some(out.to_path_buf()),
+        media_files: copied,
+    })
+}
+
+/// The tasks to export, and the ones skipped because their row changed after
+/// their last export — both in task-number order. `--all` decides only which
+/// tasks are exported: a task closed since its export is reported as changed.
+fn choose(
+    events: &[Event],
+    proj: &Projection,
+    sel: &ExportSelection,
+    labels: &[String],
+    to: Destination,
+    fields: &[Field],
+) -> (Vec<Task>, Vec<Task>) {
+    let mut candidates: Vec<&Task> = proj
+        .tasks
+        .values()
+        .filter(|t| carries(t, &sel.fields, labels))
+        .collect();
+    candidates.sort_by_key(|t| t.num);
+    let mut then = AsExported::new(events);
+    let mut picked = Vec::new();
+    let mut changed = Vec::new();
+    for t in candidates {
+        let eligible = sel.all || !t.state.is_closed();
+        match t.exported.get(to.as_str()) {
+            None if eligible => picked.push(t.clone()),
+            Some(_) if sel.again && eligible => picked.push(t.clone()),
+            Some(&at)
+                if then.row(at, &t.id, fields)
+                    != Some(render::notion_row(t, &proj.tasks, fields)) =>
+            {
+                changed.push(t.clone())
+            }
+            _ => {}
+        }
+    }
+    (picked, changed)
+}
+
+/// The ledger as each export found it (ADR-007), to render a task's row as it
+/// was uploaded. An export changes no content, so only the other events count —
+/// and the tasks of one export batch share one fold.
+struct AsExported<'a> {
+    /// Every event but exports, in fold order.
+    content: Vec<&'a Event>,
+    /// Folds of `content[..n]`, keyed by `n`.
+    folds: BTreeMap<usize, Projection>,
+}
+
+impl<'a> AsExported<'a> {
+    fn new(events: &'a [Event]) -> Self {
+        let content = fold::in_order(events)
+            .into_iter()
+            .filter(|e| !matches!(e.kind, EventKind::Export { .. }))
+            .collect();
+        AsExported {
+            content,
+            folds: BTreeMap::new(),
+        }
+    }
+
+    /// Task `id`'s row as of `at_ms`, or `None` if it didn't exist yet.
+    fn row(&mut self, at_ms: i64, id: &str, fields: &[Field]) -> Option<Vec<String>> {
+        let n = self.content.partition_point(|e| e.ts <= at_ms);
+        let content = &self.content;
+        let proj = self
+            .folds
+            .entry(n)
+            .or_insert_with(|| fold::fold(content[..n].iter().copied()));
+        let t = proj.tasks.get(id)?;
+        Some(render::notion_row(t, &proj.tasks, fields))
+    }
+}
+
+/// Recording an export failed after its file was written: delete the CSV and
+/// the media files this command copied, so nobody imports tasks the next
+/// export would send again. A file that was already beside the CSV is not in
+/// `copied`, so it stays (ADR-007 amendment 4, ADR-008).
+fn unrecorded(path: &Path, copied: &[PathBuf], e: Error) -> Error {
+    let mut notes = Vec::new();
+    match fs::remove_file(path) {
+        Ok(()) => notes.push(format!(
+            "{} was deleted, since the export wasn't recorded",
+            path.display()
+        )),
+        Err(rm) if rm.kind() == ErrorKind::NotFound => {}
+        Err(rm) => notes.push(format!(
+            "{} was written but not recorded, and couldn't be deleted ({rm}) — delete it before importing, or its tasks will be uploaded twice",
+            path.display()
+        )),
+    }
+    notes.extend(media::remove_copied(copied));
+    let note = notes.join("; ");
+    let with = |msg: String| {
+        if note.is_empty() {
+            msg
+        } else {
+            format!("{msg}; {note}")
+        }
+    };
+    match e {
+        Error::Io { context, source } => Error::io(with(context), source),
+        Error::Usage(m) => Error::Usage(with(m)),
+        Error::Conflict(m) => Error::Conflict(with(m)),
+        Error::Stale(m) => Error::Stale(with(m)),
+        Error::NotFound(id) => Error::NotFound(id),
+    }
+}
+
+/// Write a new file — never over an existing one (ADR-007): an earlier export
+/// that hasn't been imported yet would take its tasks with it.
+fn write_new_file(path: &Path, text: &str) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| {
+            if e.kind() == ErrorKind::AlreadyExists {
+                Error::Usage(format!(
+                    "{} already exists — export to a new file (and if that one hasn't been imported yet, import it first)",
+                    path.display()
+                ))
+            } else {
+                Error::io(format!("couldn't create {}", path.display()), e)
+            }
+        })?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|e| Error::io(format!("couldn't write {}", path.display()), e))
 }
 
 // -------------------------------------------------------------- helpers
@@ -742,6 +1348,17 @@ fn required(what: &str, value: &str) -> Result<String> {
 /// An optional text field: absent is fine, present-but-empty is not.
 fn optional(what: &str, value: Option<&str>) -> Result<Option<String>> {
     value.map(|v| required(what, v)).transpose()
+}
+
+/// Other commands only check that a linked file is there (ADR-008).
+fn present(store: &Store, task: Task) -> Task {
+    media::warn_about(store, std::slice::from_ref(&task), false);
+    task
+}
+
+fn present_all(store: &Store, tasks: Vec<Task>) -> Vec<Task> {
+    media::warn_about(store, &tasks, false);
+    tasks
 }
 
 /// Pull one task out of a projection (by exact id).

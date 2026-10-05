@@ -235,7 +235,7 @@ The staging rule in action: the field set + event sourcing shipped; the heavy ma
 - Unit verbs (`release`, `complete`) carry no `data`.
 - **0.2.0 adds two kinds** ([ADR-003](decisions/adr-003-claims-without-timers.md)): `claim` `{holder}` — a hold with no timer — and `reclaim` `{holder, node, reason}`, which takes back the hold it names. 0.2.0 no longer writes `lease`, but still folds it, timer and all.
 
-### B. Verbs as shipped (16) vs the §2.1 design verbs
+### B. Verbs as shipped (18) vs the §2.1 design verbs
 | Design verb | Shipped as |
 |---|---|
 | `create` | `create` `{title, priority, body, assignee}` |
@@ -246,9 +246,11 @@ The staging rule in action: the field set + event sourcing shipped; the heavy ma
 | `release`, `note`, `complete` | same names |
 | *(new)* | `reclaim` `{holder, node, reason}` — whoever knows a worker is gone takes back its hold (ADR-003) |
 | `cancel` | `set-state` → `cancelled` |
+| *(0.5.0)* | `set-field` `{field, value}` — one declared attribute, LWW per field; `value: null` clears it (ADR-006) |
+| *(0.5.0)* | `export` `{to}` — the task was uploaded (e.g. to `notion`); bookkeeping, not a change (ADR-007) |
 
 ### C. Task projection as shipped (JSON: `hippo-task show --json`)
-`id`, `num`, `title`, `body`, `state`, `priority`, `assignee`, `labels`, `relations` (`{"rel":"blocked-by","task":…}` — kebab-case, not the `blockedBy` of §2.2; 0.3.0 adds `duplicate-of`), `blocked`, `lease` (`{holder, node, expires_ms, active, since_ms, last_seen_ms}`; `expires_ms` is `null` for a claim), `created_ms`, `updated_ms`, `seq`. Not yet implemented: `refs`, `ext` (still reserved). `num` is a **derived** friendly handle (`#3`, creation order) — stable on one machine, but a future multi-machine merge may renumber it; the ULID `id` is the permanent identity.
+`id`, `num`, `title`, `body`, `state`, `priority`, `assignee`, `labels`, `fields` (0.5.0: `{"project": "dashboard"}` — declared in the store's `config.toml`, ADR-006), `relations` (`{"rel":"blocked-by","task":…}` — kebab-case, not the `blockedBy` of §2.2; 0.3.0 adds `duplicate-of`), `blocked`, `lease` (`{holder, node, expires_ms, active, since_ms, last_seen_ms}`; `expires_ms` is `null` for a claim), `created_ms`, `updated_ms`, `seq`, `exported` (0.5.0: `{"notion": <unix ms>}`, ADR-007). Not yet implemented: `refs` (still reserved — provider ids will live there, never in `fields`). `fields` is the declared, validated form of the `ext` idea: a team's own attributes, one value each. `num` is a **derived** friendly handle (`#3`, creation order) — stable on one machine, but a future multi-machine merge may renumber it; the ULID `id` is the permanent identity.
 
 ### D. Rules decided while hardening (refinements of §3–§5)
 1. **A hold (a claim, or a 0.1.x lease) belongs to actor + node** (refines §10A). `node` isn't only the tiebreak: two windows of the same agent are two *workers*, and only the holding worker can release it (a person or orchestrator can reclaim it — D8). Without this, two Claude windows could both "hold" one task — the first real use case.

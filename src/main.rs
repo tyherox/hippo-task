@@ -7,19 +7,24 @@
 
 use clap::{Parser, Subcommand};
 use hippo_task::error::Error;
+use hippo_task::media::Anchor;
 use hippo_task::model::{Priority, State, Task};
-use hippo_task::ops::{self, Changes, Ctx, Filter, NewTask, ReclaimTarget, Sort};
-use hippo_task::render::{self, who, DetailView, ErrorView, ReleaseView, TaskView};
+use hippo_task::ops::{
+    self, Changes, Ctx, Destination, ExportSelection, Filter, NewTask, ReclaimTarget, Sort,
+};
+use hippo_task::render::{
+    self, who, DetailView, ErrorView, ExportView, FieldsView, ReleaseView, TaskView,
+};
 use hippo_task::setup::{self, Choice, Place, Setup};
 use hippo_task::store::Store;
 use serde::Serialize;
-use std::io::{self, BufWriter, IsTerminal, Write};
+use std::io::{self, BufWriter, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 /// The Claude Code hook `init` suggests, so a window's tasks go back when its
 /// session ends (ADR-005).
 const SESSION_END_HOOK: &str = r#"{ "hooks": { "SessionEnd": [ { "hooks": [ { "type": "command", "command": "hippo-task release --all" } ] } ] } }"#;
-use std::process::ExitCode;
 
 const AFTER_HELP: &str = "\
 Task ids: a number (3), a full ULID, or at least 4 trailing characters of one.
@@ -27,10 +32,11 @@ Task ids: a number (3), a full ULID, or at least 4 trailing characters of one.
 
 Exit codes: 0 ok · 1 io (ledger unreadable, unwritable, or locked)
             2 usage (invalid input) · 3 not_found (no such task)
-            4 conflict (held by another worker, or task closed)
+            4 conflict (held by another worker, or starting a closed task)
+            5 stale (description changed since --base; re-read and redo)
 
 --json: stdout is one JSON document; stderr is JSON lines ({\"warning\":…} / {\"error\":…}).
-Agents: see AGENTS.md for the coordination protocol.";
+Agents: run `hippo-task guide` for the coordination protocol (AGENTS.md §A).";
 
 #[derive(Parser)]
 #[command(
@@ -81,7 +87,7 @@ enum Cmd {
         title: String,
         #[arg(long, default_value = "none")]
         priority: Priority,
-        /// Description.
+        /// Description, as markdown. Local images are copied into the store.
         #[arg(long)]
         body: Option<String>,
         /// Who should own it (durable intent — not a claim; see `start`).
@@ -90,6 +96,9 @@ enum Cmd {
         /// Add a label (repeatable).
         #[arg(long)]
         label: Vec<String>,
+        /// Set a declared field, e.g. project=dashboard (repeatable; see `hippo-task fields`).
+        #[arg(long, value_name = "NAME=VALUE")]
+        field: Vec<String>,
     },
     /// List tasks.
     List {
@@ -109,13 +118,46 @@ enum Cmd {
         /// Only tasks someone holds, and how long each holder has been quiet.
         #[arg(long)]
         held: bool,
-        /// Only tasks whose title or description contains this text, ignoring
-        /// case (repeat to require several). Search before you add a task.
+        /// Only tasks whose title, description, or image caption contains this
+        /// text, ignoring case (repeat to require several). File paths are
+        /// skipped. Search before you add a task.
         #[arg(long, value_name = "TEXT")]
         search: Vec<String>,
+        /// Only tasks with this field value, e.g. project=dashboard (repeat to require several).
+        #[arg(long, value_name = "NAME=VALUE")]
+        field: Vec<String>,
+        /// Only tasks with this label (repeat to require several).
+        #[arg(long)]
+        label: Vec<String>,
         /// Order (default: task number).
         #[arg(long, value_enum)]
         sort: Option<Sort>,
+    },
+    /// Show the fields this project declares (in its config.toml), their
+    /// allowed values, and how many tasks use each.
+    Fields,
+    /// Export tasks for another tool. `export notion` writes the CSV Notion
+    /// imports; with --out it writes a file and remembers what it exported.
+    Export {
+        /// Where the tasks are going.
+        #[arg(value_enum)]
+        to: Destination,
+        /// Write this file (never over an existing one) and record the export,
+        /// so the next one skips these tasks. Without it: a preview on stdout.
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+        /// Only tasks with this field value, e.g. project=dashboard (repeatable).
+        #[arg(long, value_name = "NAME=VALUE")]
+        field: Vec<String>,
+        /// Only tasks with this label (repeatable).
+        #[arg(long)]
+        label: Vec<String>,
+        /// Closed tasks too.
+        #[arg(long)]
+        all: bool,
+        /// Tasks already exported there, too (they'd become new rows).
+        #[arg(long)]
+        again: bool,
     },
     /// Show one task with its full history.
     Show {
@@ -141,7 +183,7 @@ enum Cmd {
         /// Clear the assignee.
         #[arg(long)]
         unassign: bool,
-        /// Replace the description.
+        /// Replace the description (markdown; local images are copied into the store).
         #[arg(long)]
         body: Option<String>,
         /// Add a label (repeatable).
@@ -150,6 +192,12 @@ enum Cmd {
         /// Remove a label (repeatable).
         #[arg(long = "label-remove")]
         label_remove: Vec<String>,
+        /// Set a declared field, e.g. project=billing — replacing its value (repeatable).
+        #[arg(long, value_name = "NAME=VALUE")]
+        field: Vec<String>,
+        /// Clear a field (repeatable).
+        #[arg(long, value_name = "NAME")]
+        clear_field: Vec<String>,
         /// Mark this task blocked by another (repeatable).
         #[arg(long)]
         block: Vec<String>,
@@ -210,12 +258,21 @@ enum Cmd {
         /// The note, e.g. "left off at the token refresh".
         text: String,
     },
-    /// Set a task's description.
+    /// Set a task's description (markdown; local images are copied into the store).
     Desc {
         /// The task: its number (3), full id, or 4+ trailing characters of the id.
         id: String,
-        /// The new description (replaces the old one).
-        text: String,
+        /// The new description. Omit it to read markdown from --file.
+        #[arg(required_unless_present = "file", conflicts_with = "file")]
+        text: Option<String>,
+        /// Read the description from this file, or - for stdin. Image paths
+        /// are relative to the file's folder (the current folder for stdin).
+        #[arg(long, value_name = "PATH")]
+        file: Option<String>,
+        /// The task's seq from the last read. If the description changed, merge
+        /// by paragraph; a conflict exits 5 and writes nothing.
+        #[arg(long, value_name = "SEQ")]
+        base: Option<u64>,
     },
     /// Complete a task (and release its claim).
     Done {
@@ -309,6 +366,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
             body,
             assignee,
             label,
+            field,
         } => {
             let new = NewTask {
                 title,
@@ -316,6 +374,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
                 body,
                 assignee,
                 labels: label,
+                fields: parse_fields(&field)?,
             };
             let t = ops::add(&store, &ctx, new)?;
             task_out(
@@ -323,6 +382,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
                 json,
                 &t,
                 now,
+                store.folder(),
                 format!("added {} {}", t.handle(), t.id),
             )?;
         }
@@ -333,6 +393,8 @@ fn run(cli: Cli) -> Result<(), Failure> {
             ready,
             held,
             search,
+            field,
+            label,
             sort,
         } => {
             let filter = Filter {
@@ -342,11 +404,17 @@ fn run(cli: Cli) -> Result<(), Failure> {
                 ready,
                 held,
                 search,
+                fields: parse_fields(&field)?,
+                labels: label,
                 sort: sort.unwrap_or_default(),
             };
             let tasks = ops::list(&store, &ctx, &filter)?;
             if json {
-                let views: Vec<TaskView> = tasks.iter().map(|t| TaskView::new(t, now)).collect();
+                let folder = store.folder();
+                let views: Vec<TaskView> = tasks
+                    .iter()
+                    .map(|t| TaskView::new(t, now, folder))
+                    .collect();
                 print_json(&mut out, &views)?;
             } else {
                 for t in &tasks {
@@ -354,12 +422,59 @@ fn run(cli: Cli) -> Result<(), Failure> {
                 }
             }
         }
+        Cmd::Fields => {
+            let report = ops::fields(&store)?;
+            if json {
+                print_json(&mut out, &FieldsView::new(&report))?;
+            } else {
+                write!(out, "{}", render::fields_text(&report))?;
+            }
+        }
+        Cmd::Export {
+            to,
+            out: file,
+            field,
+            label,
+            all,
+            again,
+        } => {
+            if json && file.is_none() {
+                return Err(Failure::App(Error::Usage(
+                    "export --json needs --out FILE: the CSV goes to the file, and stdout gets the JSON report".into(),
+                )));
+            }
+            let selection = ExportSelection {
+                fields: parse_fields(&field)?,
+                labels: label,
+                all,
+                again,
+            };
+            let file = match file {
+                Some(f) => Some(
+                    std::path::absolute(&f)
+                        .map_err(|e| Error::io(format!("couldn't resolve {}", f.display()), e))?,
+                ),
+                None => None,
+            };
+            let e = ops::export(&store, &ctx, to, &selection, file.as_deref())?;
+            if json {
+                print_json(&mut out, &ExportView::new(&e, now, store.folder()))?;
+            } else if file.is_none() {
+                // A preview: the CSV itself on stdout; anything else on stderr.
+                write!(out, "{}", e.csv)?;
+                if !e.changed.is_empty() {
+                    store.warn(&render::changed_text(&e.changed));
+                }
+            } else {
+                write!(out, "{}", render::export_text(&e))?;
+            }
+        }
         Cmd::Show { id } => {
             let detail = ops::show(&store, &id)?;
             if json {
-                print_json(&mut out, &DetailView::new(&detail, now))?;
+                print_json(&mut out, &DetailView::new(&detail, now, store.folder()))?;
             } else {
-                write!(out, "{}", render::detail_text(&detail, now))?;
+                write!(out, "{}", render::detail_text(&detail, now, store.folder()))?;
             }
         }
         Cmd::Update {
@@ -372,6 +487,8 @@ fn run(cli: Cli) -> Result<(), Failure> {
             body,
             label_add,
             label_remove,
+            field,
+            clear_field,
             block,
             unblock,
             duplicate_of,
@@ -390,9 +507,18 @@ fn run(cli: Cli) -> Result<(), Failure> {
                 unblock,
                 force,
                 duplicate_of,
+                fields: parse_fields(&field)?,
+                clear_fields: clear_field,
             };
             let t = ops::update(&store, &ctx, &id, changes)?;
-            task_out(&mut out, json, &t, now, format!("updated {}", t.handle()))?;
+            task_out(
+                &mut out,
+                json,
+                &t,
+                now,
+                store.folder(),
+                format!("updated {}", t.handle()),
+            )?;
         }
         Cmd::Lease { .. } => {
             return Err(Failure::App(Error::Usage(
@@ -406,12 +532,16 @@ fn run(cli: Cli) -> Result<(), Failure> {
                 t.handle(),
                 who(&ctx.actor, &ctx.node)
             );
-            task_out(&mut out, json, &t, now, line)?;
+            task_out(&mut out, json, &t, now, store.folder(), line)?;
         }
         Cmd::Release { all: true, .. } => {
             let released = ops::release_all(&store, &ctx)?;
             if json {
-                let views: Vec<TaskView> = released.iter().map(|t| TaskView::new(t, now)).collect();
+                let folder = store.folder();
+                let views: Vec<TaskView> = released
+                    .iter()
+                    .map(|t| TaskView::new(t, now, folder))
+                    .collect();
                 print_json(&mut out, &views)?;
             } else if released.is_empty() {
                 writeln!(out, "you hold nothing — nothing to release")?;
@@ -426,7 +556,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
             let id = id.unwrap_or_default();
             let r = ops::release(&store, &ctx, &id)?;
             if json {
-                print_json(&mut out, &ReleaseView::new(&r, now))?;
+                print_json(&mut out, &ReleaseView::new(&r, now, store.folder()))?;
             } else if r.released {
                 // You held it, so it was open (closed tasks hold nothing), and a
                 // `doing` task was just reset: either way it's `todo` now.
@@ -452,8 +582,10 @@ fn run(cli: Cli) -> Result<(), Failure> {
             };
             let back = ops::reclaim(&store, &ctx, &target, reason.as_deref(), force)?;
             if json {
-                let views: Vec<TaskView> =
-                    back.iter().map(|r| TaskView::new(&r.task, now)).collect();
+                let views: Vec<TaskView> = back
+                    .iter()
+                    .map(|r| TaskView::new(&r.task, now, store.folder()))
+                    .collect();
                 print_json(&mut out, &views)?;
             } else if back.is_empty() {
                 let what = match &target {
@@ -474,19 +606,88 @@ fn run(cli: Cli) -> Result<(), Failure> {
         }
         Cmd::Note { id, text } => {
             let t = ops::note(&store, &ctx, &id, &text)?;
-            task_out(&mut out, json, &t, now, format!("noted on {}", t.handle()))?;
+            task_out(
+                &mut out,
+                json,
+                &t,
+                now,
+                store.folder(),
+                format!("noted on {}", t.handle()),
+            )?;
         }
-        Cmd::Desc { id, text } => {
-            let t = ops::describe(&store, &ctx, &id, &text)?;
-            task_out(&mut out, json, &t, now, format!("described {}", t.handle()))?;
+        Cmd::Desc {
+            id,
+            text,
+            file,
+            base,
+        } => {
+            let (markdown, anchor) = load_description(text, file)?;
+            let t = ops::describe(&store, &ctx, &id, &markdown, &anchor, base)?;
+            task_out(
+                &mut out,
+                json,
+                &t,
+                now,
+                store.folder(),
+                format!("described {}", t.handle()),
+            )?;
         }
         Cmd::Done { id, force } => {
             let t = ops::done(&store, &ctx, &id, force)?;
-            task_out(&mut out, json, &t, now, format!("done {}", t.handle()))?;
+            task_out(
+                &mut out,
+                json,
+                &t,
+                now,
+                store.folder(),
+                format!("done {}", t.handle()),
+            )?;
         }
     }
     out.flush()?;
     Ok(())
+}
+
+/// The description text and where its relative image paths resolve (ADR-008).
+fn load_description(text: Option<String>, file: Option<String>) -> Result<(String, Anchor), Error> {
+    match (text, file) {
+        (Some(text), None) => Ok((text, Anchor::Cwd)),
+        (None, Some(path)) if path == "-" => {
+            let mut text = String::new();
+            io::stdin()
+                .read_to_string(&mut text)
+                .map_err(|e| Error::io("couldn't read stdin", e))?;
+            Ok((text, Anchor::Cwd))
+        }
+        (None, Some(path)) => {
+            let path = PathBuf::from(&path);
+            let meta = std::fs::metadata(&path).map_err(|e| {
+                if e.kind() == io::ErrorKind::NotFound {
+                    Error::Usage(format!("no such file: {}", path.display()))
+                } else {
+                    Error::io(format!("couldn't read {}", path.display()), e)
+                }
+            })?;
+            if !meta.is_file() {
+                return Err(Error::Usage(format!("{} isn't a file", path.display())));
+            }
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| Error::io(format!("couldn't read {}", path.display()), e))?;
+            let anchor = match path.parent() {
+                Some(dir) if !dir.as_os_str().is_empty() => Anchor::Dir(dir.to_path_buf()),
+                _ => Anchor::Cwd,
+            };
+            Ok((text, anchor))
+        }
+        _ => Err(Error::Usage(
+            "pass the description as text, or with --file (use --file - to read stdin)".into(),
+        )),
+    }
+}
+
+/// Every `--field name=value` argument, split (ADR-006).
+fn parse_fields(args: &[String]) -> Result<Vec<(String, String)>, Error> {
+    args.iter().map(|arg| ops::parse_field(arg)).collect()
 }
 
 /// Print one task: its JSON view, or the given human line.
@@ -495,10 +696,11 @@ fn task_out(
     json: bool,
     t: &Task,
     now: i64,
+    folder: &std::path::Path,
     line: String,
 ) -> Result<(), Failure> {
     if json {
-        print_json(out, &TaskView::new(t, now))
+        print_json(out, &TaskView::new(t, now, folder))
     } else {
         writeln!(out, "{line}")?;
         Ok(())

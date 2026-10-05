@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "playground-ui",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "playground/serve.py",
+        "--no-open"
+      ],
+      "port": 8787
+    }
+  ]
+}
