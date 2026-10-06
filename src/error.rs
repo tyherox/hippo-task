@@ -29,8 +29,8 @@ pub enum Error {
     /// The task's current state refuses the action (exit 4): someone else
     /// holds the lease, or the task is closed.
     Conflict(String),
-    /// The description changed since the caller's `--base`, and the two edits
-    /// don't merge (exit 5). Nothing was written. The caller re-reads and retries.
+    /// A description conflicts with its base, or a conditional UI edit/export
+    /// changed since review (exit 5). No events were written; re-read and retry.
     Stale(String),
     /// An I/O failure (exit 1). `context` says what we were doing, to which
     /// file — so the message is actionable, not just "permission denied".

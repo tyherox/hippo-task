@@ -40,7 +40,7 @@ Rules:
 | 2 | `usage` | invalid input (bad value, ambiguous id, nothing to do), or no task store yet | fix the command; don't retry it unchanged. No task store: tell the human — they choose where tasks live with `hippo-task init` |
 | 3 | `not_found` | no task matches the id | re-list; the number may be wrong |
 | 4 | `conflict` | held by another worker — or, for `start`, the task is closed; or an agent reclaiming without `--force` | pick another task — don't force |
-| 5 | `stale` | the description changed since `--base`, and those paragraphs conflict | re-read the task and redo the edit — nothing was written |
+| 5 | `stale` | the description conflicts with `--base`, or a conditional UI edit/export needs review | re-read the task or preview and redo the action — no events were written |
 
 Closed tasks (`done` or `cancelled`): only `start` refuses them. `hippo-task update 3 --state todo` reopens one; notes, labels, title, and priority edits are accepted on a closed task; `hippo-task done 3` on a task that's already done is recorded but changes nothing (exit 0, `applied: false` in its history), and on a cancelled task it completes it (no refusal).
 
@@ -71,7 +71,33 @@ Task object:
 
 On stderr, `--json` mode writes JSON lines: zero or more `{"warning": "…"}`, then — on failure — one error object with the fields `error` (the kind), `message`, and `exit_code`, e.g. `{"error":"conflict","message":"#3 is held by agent:codex@cx (quiet 7m) — back off and pick another task","exit_code":4}`.
 
-Stability: within 0.6.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
+`ui --no-open --json` starts the optional local browser UI and prints one launch
+object: `{"url", "store", "actor"}`. `url` includes a per-launch session token
+in its fragment; `store` is the resolved store folder; `actor` is `human:local`.
+The process keeps running until stopped. It ignores inherited actor/node values
+for UI writes and never initializes a missing store. Agents should continue
+using the CLI JSON operations for coordination.
+
+The UI's local HTTP API is an internal interface. Its state includes `tasks`,
+`fields`, `store`, `actor`, `changed` (IDs whose exported rows changed), and
+`warnings`. Task/detail responses use the existing task JSON. Export preview
+adds `review` (an opaque fingerprint), `csv`, `exported`, `changed`, and
+`suggested_path`; saving returns the existing export report. Preview appends
+nothing. Conditional edits and export saves report `stale` if review is needed.
+`POST /api/markdown/preview` accepts `{"markdown": "…"}` and returns
+`{"html": "…", "warnings": []}` without saving. The HTML escapes raw HTML,
+restricts links, and includes `data-media="media/<hash>.<ext>"` placeholders for
+store media. `GET /api/media/<hash>.<ext>` returns validated file bytes with
+their MIME type, using the same session authentication as every other API.
+State also includes `media_limits`: `{"max_image_bytes", "max_video_bytes"}`.
+`POST /api/media` accepts a single file's raw bytes as
+`application/octet-stream` and returns `{"path", "mime", "bytes", "warnings"}`.
+The path is `media/<sha256>.<ext>`; original filenames are not transmitted.
+Uploads add files to the local store without writing task events. Saving the
+description attaches their links; discarding a draft does not delete uploaded
+files, which could already be shared by other tasks.
+
+Stability: within 0.7.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
 
 ## B. Changing this crate
 
@@ -84,5 +110,5 @@ Stability: within 0.6.x, fields are only ever added — never renamed or removed
 - **Privacy by default.** Collect nothing about the user or machine unless they opt in (guarded by `tests/cli.rs`). Flag any change that would record personal data before making it.
 - **Docs are tested** (`tests/docs.rs`): a new command must appear in README.md, a new JSON field here, a version bump in CHANGELOG.md.
 - **Releasing** (binaries for macOS, Linux, and Windows): bump `version` in Cargo.toml (then `cargo update --workspace`), add its CHANGELOG section, and land both on `main` with CI green. Then push that one tag — `git tag v0.4.1 && git push origin v0.4.1`, never `git push --tags`. `.github/workflows/release.yml` checks the tag against Cargo.toml and the CHANGELOG, builds every target with `scripts/package.sh`, publishes the release, and installs it on each OS. Running the workflow by hand is a dry run.
-- **Don't over-engineer.** Full HLC, hash-chaining, compaction, sync, storage adapters, and a GUI stay deferred until real use earns them.
+- **Don't over-engineer.** Full HLC, hash-chaining, compaction, sync, storage adapters, and hosted collaboration stay deferred until real use earns them. The optional local review UI is bounded by ADR-009.
 - Verbs: `make setup | build | typecheck | lint | fmt | test | test-affected | integrity | verify | doctor | install | demo | play | ui`.

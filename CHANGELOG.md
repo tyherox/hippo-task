@@ -2,6 +2,38 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
+## [0.7.0] - Unreleased
+
+### Added
+
+- `hippo-task ui`: explicitly launched local board/list UI, packaged in the
+  binary. Search/filter, create tasks, edit rows or a shared task panel, and
+  move cards between states while respecting existing claims. Saves append
+  ordinary events as `human:local`; no task or event schema change.
+- Conditional human edits protect against stale metadata and preserve drafts
+  on failure; description-only edits retain paragraph merging.
+- Description **Write / Preview** switch renders unsaved Markdown, tables,
+  task lists, and authenticated store images/video. Preview records nothing,
+  escapes raw HTML, and never loads external images.
+- **Add media** in the description editor selects local images/videos, copies
+  validated files into the store, and inserts Markdown links into the draft.
+  Shows upload progress and errors, reuses configured media limits and
+  deduplication, and attaches files to the task only on explicit Save.
+- Review and export an exact selection to a Notion-ready CSV. Read-only
+  previews are checked again before saving, including blocker changes and
+  export bookkeeping. Previously exported tasks require explicit inclusion.
+- Loopback-only HTTP server with per-launch token, origin/host checks, and
+  embedded assets. No Node, Python, service, account, telemetry, or automatic
+  store initialization is required for the product UI.
+
+### Changed
+
+- `make ui` opens the real-project UI; `make playground-ui` retains the scratch
+  development playground. Direct Notion publishing and general spreadsheet CSV
+  profiles remain deferred.
+- Exit code 5 (`stale`) also covers conditional UI edits and export previews.
+  Existing CLI command output shapes and on-disk event shapes are preserved.
+
 ## [0.6.0] - 2026-10-06 — internal release
 
 Descriptions are markdown, with a screenshot or a short recording beside the words ([ADR-008](docs/decisions/adr-008-descriptions-markdown.md)). No new event kind: the description is still the `body` of `create` and `set-body`, so an older binary still reads the store and shows the links as text. New options, a new JSON field, and exit code 5 are why this is 0.6.0.

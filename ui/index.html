@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HippoTask · Your tasks</title>
+  <link rel="stylesheet" href="/style.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="HippoTask home"><span class="brand-mark">h.</span>HippoTask</a>
+    <span class="header-divider"></span><span id="project-name">Workspace</span>
+    <span id="connection" class="connection">Connecting…</span>
+  </header>
+  <main>
+    <section class="page-heading">
+      <div><p class="eyebrow">LOCAL WORKSPACE</p><h1>Your tasks<span class="title-period">.</span></h1><p class="subtitle">A little clarity before the handoff.</p></div>
+      <div class="heading-actions"><button id="new-task">+ New task</button><button id="export-button" class="primary" disabled>Export selected <span id="export-count">0</span></button></div>
+    </section>
+    <div id="connection-error" class="notice error" role="alert" hidden></div>
+    <div id="warnings" class="notice" role="status" hidden></div>
+    <section class="toolbar" aria-label="Task controls">
+      <div class="view-switch" aria-label="View"><button id="board-view" aria-pressed="true"><span class="board-symbol" aria-hidden="true"></span>Board</button><button id="list-view" aria-pressed="false"><span class="list-symbol" aria-hidden="true"></span>List</button></div>
+      <input id="search" type="search" aria-label="Search tasks" placeholder="Search tasks…">
+      <select id="status-filter" aria-label="Filter by status"><option value="">All statuses</option><option value="todo">Todo</option><option value="doing">Doing</option><option value="done">Done</option><option value="cancelled">Cancelled</option><option value="blocked">Blocked</option></select>
+      <select id="priority-filter" aria-label="Filter by priority"><option value="">All priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="med">Medium</option><option value="low">Low</option><option value="none">No priority</option></select>
+      <select id="label-filter" aria-label="Filter by label"><option value="">All labels</option></select>
+      <select id="export-filter" aria-label="Filter by export status"><option value="">Any export status</option><option value="new">Not exported</option><option value="exported">Exported</option><option value="changed">Changed since export</option></select>
+      <div id="field-filters" class="field-filters"></div>
+      <label class="cancelled-toggle"><input id="show-cancelled" type="checkbox"> Show cancelled</label>
+    </section>
+    <div class="selection-bar"><label><input id="select-visible" type="checkbox"> <span id="selection-label">Select visible</span></label><button id="clear-selection" class="text-button" hidden>Clear selection</button><span id="task-count">Loading tasks…</span><span id="draft-count"></span></div>
+    <div class="workspace" id="workspace"><section id="tasks" aria-label="Tasks"><div class="empty"><p>Opening your workspace…</p></div></section><aside id="editor" aria-label="Task editor" hidden></aside></div>
+    <footer><span id="store-path"></span><span>Saved edits are shared with your agents.</span></footer>
+  </main>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="export-dialog" aria-labelledby="export-title">
+    <div class="dialog-heading"><div><p class="eyebrow">HANDOFF</p><h2 id="export-title">Review your export</h2></div><button id="close-export" aria-label="Close export">Close</button></div>
+    <p class="subtitle">Notion-ready CSV · Review the rows, then save a file to import.</p>
+    <label class="export-again"><input id="include-again" type="checkbox"> Include previously exported tasks</label>
+    <p id="duplicate-hint" class="notice" hidden>Notion CSV imports add rows. Including tasks again can create duplicates.</p>
+    <div id="export-error" class="notice error" role="alert" hidden></div>
+    <p id="export-summary">Preparing preview…</p>
+    <div id="export-preview" class="export-preview"></div>
+    <div id="export-result" class="notice success" hidden></div>
+    <label class="path-label" for="export-path">Save CSV to</label><input id="export-path" placeholder="Absolute path to a new .csv file" spellcheck="false">
+    <p class="help">Existing files are never overwritten. Linked media is copied beside the CSV and must be attached in Notion manually.</p>
+    <div class="dialog-actions"><button id="refresh-preview">Refresh preview</button><button id="save-export" class="primary" disabled>Save CSV</button></div>
+  </dialog>
+</body>
+</html>

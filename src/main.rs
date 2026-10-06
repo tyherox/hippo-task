@@ -67,6 +67,15 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Cmd {
+    /// Open the optional local board/list UI for this project's tasks.
+    Ui {
+        /// Print the URL without opening a browser.
+        #[arg(long)]
+        no_open: bool,
+        /// Loopback port; 0 chooses an available port.
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+    },
     /// Choose where this project's tasks live. Asks, unless you pass --here or --folder.
     Init {
         /// Keep the tasks in this project, in .hippotask/.
@@ -347,6 +356,21 @@ fn run(cli: Cli) -> Result<(), Failure> {
         _ => {}
     }
 
+    if let Cmd::Ui { port, no_open } = &cli.cmd {
+        let start = cli.dir.clone().map_or_else(current_folder, Ok)?;
+        let start = std::path::absolute(&start)
+            .map_err(|e| Error::io("couldn't resolve the UI project folder", e))?;
+        if !start.is_dir() {
+            return Err(Error::Usage(format!(
+                "{} is not an existing project folder",
+                start.display()
+            ))
+            .into());
+        }
+        let folder = setup::discover(&start)?;
+        hippo_task::ui::run(&folder, *port, *no_open, json, &mut out)?;
+        return Ok(());
+    }
     let folder = store_folder(cli.dir.as_deref())?;
     let store = if json {
         Store::in_folder(folder)
@@ -359,7 +383,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
 
     match cli.cmd {
         // Handled above; listed so this match stays exhaustive.
-        Cmd::Init { .. } | Cmd::Guide => {}
+        Cmd::Init { .. } | Cmd::Guide | Cmd::Ui { .. } => {}
         Cmd::Add {
             title,
             priority,
@@ -444,6 +468,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
                 )));
             }
             let selection = ExportSelection {
+                ids: None,
                 fields: parse_fields(&field)?,
                 labels: label,
                 all,

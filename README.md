@@ -6,7 +6,7 @@
 
 It's the reference implementation of the open agent-native task schema (`docs/schema-design.md`).
 
-**Status: 0.6.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
+**Status: 0.7.0 — development** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
 
 *History:* HippoTask started as a TypeScript prototype of a universal interop schema with platform adapters — preserved at git tag `v0-typescript`, with its research (the 10-platform schema study, provider scorecards) in `docs/archive/typescript-v0/`. This Rust core narrows the first release to local, multi-agent task memory; platform adapters come back once sync is earned.
 
@@ -135,7 +135,7 @@ HIPPO_ACTOR=agent:claude HIPPO_NODE=win-2 hippo-task start 3    # → exit 4: he
 | 2 | `usage` | invalid input: bad value, ambiguous or too-short id, nothing to do, `--dir` doesn't exist |
 | 3 | `not_found` | no task matches the id |
 | 4 | `conflict` | held by another worker — or, for `start`, the task is closed; or an agent reclaiming without `--force` |
-| 5 | `stale` | the description changed since `--base`, and the edits conflict |
+| 5 | `stale` | the description conflicts with `--base`, or a conditional UI edit/export needs review |
 
 Errors go to stderr as `error: …` (a JSON line with `--json`); results go to stdout.
 
@@ -157,6 +157,56 @@ Errors go to stderr as `error: …` (a JSON line with `--json`); results go to s
 - The store's settings — the fields it declares — are in `config.toml` next to the ledger. Only the CLI reads it; editing it never rewrites history.
 - **Privacy:** by default nothing about you or your machine is recorded — no username, no hostname. What you type — titles, notes, descriptions, and any actor name you choose — is stored **in cleartext, and forever** (append-only means it can't be edited out). Don't put secrets or personal data in tasks. Files linked from a description are stored byte for byte, including any metadata the device wrote — a phone photo can carry the place it was taken. Screenshots and screen recordings typically don't. Stripping that metadata is later work. If you commit the store to git, everyone who can read the repo can read it, files included. The store's own `.gitignore` ignores the whole folder (so `media/` with it). A team that commits the store anyway commits those files too, and a 64 MiB video is past the 50 MiB size at which GitHub warns.
 
+## Optional board and list UI
+
+Run `hippo-task ui` in a project with an existing task store. It opens a local
+browser interface; the terminal process runs until you press Ctrl-C. Nothing
+starts during normal CLI use, and no extra runtime or account is needed.
+
+```bash
+hippo-task ui                     # open this project's board
+hippo-task ui --no-open           # print the URL for manual opening
+hippo-task ui --port 8787         # choose a loopback port (default: available port)
+hippo-task --dir /path/to/project ui
+```
+
+- Switch **Board / List**, search and filter, and select tasks. Selection and
+  unsaved drafts survive view switches. Cancelled tasks have an explicit toggle.
+- Edit a list row or open the shared task panel. **Save** writes to HippoTask;
+  **Discard** abandons the unsaved draft. Enter saves a single-line row edit,
+  Escape cancels it, and Ctrl/Cmd+Enter saves the open task panel. Drafts live
+  only in the tab: save them before closing or restarting the UI.
+- Move cards between states with drag and drop or the status menu. Moving to
+  Doing does not claim the task. Another worker's active claim prevents state
+  changes; details remain editable.
+- Concurrent edits cannot silently overwrite a stale metadata draft. Compare
+  the latest values and explicitly keep your changes on that version before
+  saving again. Description-only edits retain paragraph merging.
+- **Export selected** previews exactly the selected tasks as a Notion-ready
+  CSV. Save it to a new path, then import it in Notion. If rows or eligibility
+  change after preview, refresh and review again. Previously exported tasks
+  are skipped unless explicitly included again; Notion imports add rows and
+  do not update existing ones. Linked media is copied beside the CSV for
+  manual attachment. This is an export, not synchronization or direct publishing.
+
+The server listens only on `127.0.0.1` and requires its per-launch session token
+for task data and edits. Opening it never initializes a store. UI actions use
+`human:local` and a fresh session node, ignoring the launching agent's actor/node
+settings. No username, hostname, task draft, or browser preference is collected.
+Descriptions have **Write / Preview** controls. Preview renders your unsaved
+Markdown, including headings, lists, tables, checkboxes, code, and stored images
+or video. Switch back to Write to continue editing; only **Save** updates the
+task. Raw HTML is displayed as text, and remote images are never fetched.
+
+Use **Add media** in the description editor to choose images or videos. Links
+are inserted at the cursor in Write, or appended in Preview. PNG, JPEG, GIF,
+WebP, MP4, MOV, and WebM use the existing configured limits (8 MiB per image and
+64 MiB per video by default). The UI shows upload progress and errors; Save
+becomes available when the upload finishes. Files are copied to the local store
+when added, with generic Image/Video captions you can edit. Original filenames
+are not stored. Only **Save** attaches the description to a task; discarding a
+draft leaves its uploaded files in the store, as with CLI media ingestion.
+
 ## Develop
 
 ```bash
@@ -164,7 +214,8 @@ make verify     # fmt --check · clippy -D warnings · tests · test-integrity  
 make test       # also: make lint · make fmt · make doctor · make typecheck
 make demo       # narrated demo that drives the real binary
 make play       # terminal playground: a REPL over the real binary, with identity switching to try contention
-make ui         # local playground: Live mode runs the real binary, Simulate runs in-browser
+make ui         # optional board/list UI for this project's configured task store
+make playground-ui # scratch playground: real CLI or in-browser simulation
 ```
 
 Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `src/store.rs` → `src/ops.rs` → `src/error.rs` → `src/render.rs` → `src/setup.rs` → `src/config.rs` → `src/main.rs`. The tests are the spec: `src/fold.rs` (merge rules + a property test), `tests/store.rs`, `tests/ops.rs`, `tests/cli.rs`, `tests/setup.rs`, `tests/fields.rs`, `tests/export.rs`, `tests/install.rs`, `tests/docs.rs`.
@@ -173,8 +224,8 @@ Read the code in this order: `src/model.rs` → `src/fold.rs` (the heart) → `s
 
 ## Scope
 
-- **In 0.6.0:** descriptions are markdown, with images and video stored beside the ledger and merged by paragraph when two edits race; fields declared in `config.toml`, and export to Notion (CSV, with those files copied beside it) that remembers what it exported; prebuilt binaries for macOS, Linux and Windows; single-file ledger in a store chosen with `init` and found from anywhere in the project; fold to state; fourteen commands; actor + node identity; claims without timers, handed back by release or reclaim; search, and duplicates linked and cancelled; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
-- **Deferred until real use earns them (staging rule):** full Hybrid Logical Clock, per-task hash-chaining, snapshots/compaction, storage adapters, multi-machine sync, a GUI. The schema leaves room for each without a breaking change.
+- **In 0.7.0:** an optional local board/list UI for reviewing, editing, and exporting selected tasks; descriptions are markdown, with images and video stored beside the ledger and merged by paragraph when two edits race; fields declared in `config.toml`, and export to Notion (CSV, with those files copied beside it) that remembers what it exported; prebuilt binaries for macOS, Linux and Windows; single-file ledger in a store chosen with `init` and found from anywhere in the project; fold to state; actor + node identity; claims without timers, handed back by release or reclaim; search, and duplicates linked and cancelled; derived blocked; JSON + exit-code contract; locking, fsync, crash tolerance.
+- **Deferred until real use earns them (staging rule):** full Hybrid Logical Clock, per-task hash-chaining, snapshots/compaction, storage adapters, multi-machine sync, hosted collaboration, and direct publishing. The schema leaves room for each without a breaking change.
 
 ## Troubleshooting
 

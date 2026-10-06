@@ -20,6 +20,7 @@ use crate::model::{Event, EventKind, Lease, Priority, RelType, State, Task};
 use crate::render::{self, hold_status, who};
 use crate::store::{Store, Tx};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
@@ -234,6 +235,29 @@ impl Changes {
 /// Change fields of a task. One event per change, all in one transaction.
 /// (Setting a field to the value it already has is recorded but changes nothing.)
 pub fn update(store: &Store, ctx: &Ctx, id: &str, changes: Changes) -> Result<Task> {
+    update_inner(store, ctx, id, changes, None)
+}
+
+/// Save a human edit against the version originally displayed. Metadata is
+/// checked under the write lock; body-only edits retain paragraph merging.
+/// A mixed edit either writes all its fields or writes no events.
+pub fn update_checked(
+    store: &Store,
+    ctx: &Ctx,
+    id: &str,
+    changes: Changes,
+    base: u64,
+) -> Result<Task> {
+    update_inner(store, ctx, id, changes, Some(base))
+}
+
+fn update_inner(
+    store: &Store,
+    ctx: &Ctx,
+    id: &str,
+    changes: Changes,
+    base: Option<u64>,
+) -> Result<Task> {
     if changes.is_empty() {
         return Err(Error::Usage(
             "nothing to update — pass at least one change (see `hippo-task update --help`)".into(),
@@ -251,7 +275,7 @@ pub fn update(store: &Store, ctx: &Ctx, id: &str, changes: Changes) -> Result<Ta
     }
     let title = optional("title", changes.title.as_deref())?;
     let assignee = optional("assignee", changes.assignee.as_deref())?;
-    let body = match changes.body.as_deref() {
+    let mut body = match changes.body.as_deref() {
         Some(text) => Some(stored_body(store, text, &Anchor::Cwd)?),
         None => None,
     };
@@ -291,6 +315,26 @@ pub fn update(store: &Store, ctx: &Ctx, id: &str, changes: Changes) -> Result<Ta
     let mut tx = store.begin()?;
     let proj = fold::fold(tx.events());
     let task = resolve(&proj.tasks, id)?.clone();
+    if let Some(base) = base {
+        if base == 0 || base > task.seq {
+            return Err(Error::Usage(
+                "invalid base version — re-read the task".into(),
+            ));
+        }
+        let metadata = Changes {
+            body: None,
+            ..changes.clone()
+        };
+        if base != task.seq && !metadata.is_empty() {
+            return Err(Error::Stale(format!(
+                "{} changed since you opened it — nothing was saved; compare the latest task with your draft and retry",
+                task.handle()
+            )));
+        }
+        if let Some(submitted) = body {
+            body = Some(merged_body(tx.events(), &task, base, submitted)?);
+        }
+    }
     // Clearing works on any field the task carries — even one the config no
     // longer declares, so old values can be cleaned up. Otherwise the name
     // must be declared: a typo mustn't silently clear nothing.
@@ -988,6 +1032,9 @@ impl Destination {
 /// Which tasks an export takes. By default: open tasks not exported there yet.
 #[derive(Debug, Clone, Default)]
 pub struct ExportSelection {
+    /// An exact set of task references. None means all matching tasks;
+    /// Some(empty) means none, never an accidental full-store export.
+    pub ids: Option<Vec<String>>,
     /// Only tasks with every one of these field values.
     pub fields: Vec<(String, String)>,
     /// Only tasks with every one of these labels.
@@ -1001,6 +1048,8 @@ pub struct ExportSelection {
 /// What [`export`] did.
 #[derive(Debug, Clone)]
 pub struct Exported {
+    /// Fingerprint of the reviewed rows and eligibility, for conditional export.
+    pub review: String,
     /// The CSV: a header, then one row per task.
     pub csv: String,
     /// The tasks in it, in order — as they are after the export was recorded.
@@ -1025,17 +1074,60 @@ pub fn export(
     selection: &ExportSelection,
     out: Option<&Path>,
 ) -> Result<Exported> {
+    export_inner(store, ctx, to, selection, out, None)
+}
+
+/// Write only if the selected rows and export eligibility still match the
+/// read-only preview. Recheck under the same lock used to record the export.
+pub fn export_reviewed(
+    store: &Store,
+    ctx: &Ctx,
+    to: Destination,
+    selection: &ExportSelection,
+    out: &Path,
+    review: &str,
+) -> Result<Exported> {
+    export_inner(store, ctx, to, selection, Some(out), Some(review))
+}
+
+/// Which rows changed since their last export, without checking or copying
+/// media bytes. Used by the UI's periodic task refresh.
+pub fn changed_since_export(store: &Store, to: Destination) -> Result<Vec<Task>> {
+    let config = store.config()?;
+    let events = store.read()?.events;
+    let proj = fold::fold(&events);
+    let (_, changed) = choose(
+        &events,
+        &proj,
+        &ExportSelection::default(),
+        &[],
+        to,
+        &config.fields,
+    )?;
+    Ok(changed)
+}
+
+fn export_inner(
+    store: &Store,
+    ctx: &Ctx,
+    to: Destination,
+    selection: &ExportSelection,
+    out: Option<&Path>,
+    expected: Option<&str>,
+) -> Result<Exported> {
     let config = store.config()?;
     let labels = checked_filters(store, &config, &selection.fields, &selection.labels)?;
     let Some(out) = out else {
         // A preview: read, choose, render — record nothing.
         let events = store.read()?.events;
         let proj = fold::fold(&events);
-        let (picked, changed) = choose(&events, &proj, selection, &labels, to, &config.fields);
+        let (picked, changed) = choose(&events, &proj, selection, &labels, to, &config.fields)?;
         let csv = render::notion_csv(&picked, &proj.tasks, &config.fields);
+        let review = export_fingerprint(&proj, selection, &labels, to, &config.fields, &csv)?;
         media::warn_about(store, &picked, true);
         media::warn_about(store, &changed, true);
         return Ok(Exported {
+            review,
             csv,
             tasks: picked,
             changed,
@@ -1052,7 +1144,14 @@ pub fn export(
     {
         let events = store.read()?.events;
         let proj = fold::fold(&events);
-        let (picked, changed) = choose(&events, &proj, selection, &labels, to, &config.fields);
+        let (picked, changed) = choose(&events, &proj, selection, &labels, to, &config.fields)?;
+        if let Some(expected) = expected {
+            let csv = render::notion_csv(&picked, &proj.tasks, &config.fields);
+            if expected != export_fingerprint(&proj, selection, &labels, to, &config.fields, &csv)?
+            {
+                return Err(Error::Stale("the export changed since preview — review the updated rows before saving; no file was written".into()));
+            }
+        }
         media::warn_about(store, &picked, true);
         media::warn_about(store, &changed, true);
         if !picked.is_empty() {
@@ -1064,13 +1163,24 @@ pub fn export(
     }
     // Then choose again under the lock, so what's recorded is what was written.
     let mut tx = store.begin()?;
+    // Config is a separate file. Re-read it after any media copying so a
+    // changed display name or filter cannot slip past the reviewed preview.
+    let config = store.config()?;
+    let labels = checked_filters(store, &config, &selection.fields, &selection.labels)?;
     let proj = fold::fold(tx.events());
-    let (picked, changed) = choose(tx.events(), &proj, selection, &labels, to, &config.fields);
+    let (picked, changed) = choose(tx.events(), &proj, selection, &labels, to, &config.fields)?;
     let csv = render::notion_csv(&picked, &proj.tasks, &config.fields);
+    let review = export_fingerprint(&proj, selection, &labels, to, &config.fields, &csv)?;
+    if expected.is_some_and(|expected| expected != review) {
+        return Err(Error::Stale(
+            "the export changed since preview — review the updated rows before saving; no file was written".into(),
+        ));
+    }
     if picked.is_empty() {
         // Another export took them in the meantime. Files copied for them
         // stay: that export may link the same ones.
         return Ok(Exported {
+            review,
             csv,
             tasks: picked,
             changed,
@@ -1100,6 +1210,7 @@ pub fn export(
     let ledger = tx.commit(events).map_err(|e| unrecorded(out, e))?;
     let tasks = tasks_in(fold::fold(&ledger.events), &picked)?;
     Ok(Exported {
+        review,
         csv,
         tasks,
         changed,
@@ -1118,13 +1229,8 @@ fn choose(
     labels: &[String],
     to: Destination,
     fields: &[Field],
-) -> (Vec<Task>, Vec<Task>) {
-    let mut candidates: Vec<&Task> = proj
-        .tasks
-        .values()
-        .filter(|t| carries(t, &sel.fields, labels))
-        .collect();
-    candidates.sort_by_key(|t| t.num);
+) -> Result<(Vec<Task>, Vec<Task>)> {
+    let candidates = export_candidates(proj, sel, labels)?;
     let mut then = AsExported::new(events);
     let mut picked = Vec::new();
     let mut changed = Vec::new();
@@ -1142,7 +1248,56 @@ fn choose(
             _ => {}
         }
     }
-    (picked, changed)
+    Ok((picked, changed))
+}
+
+fn export_candidates<'a>(
+    proj: &'a Projection,
+    sel: &ExportSelection,
+    labels: &[String],
+) -> Result<Vec<&'a Task>> {
+    let ids = sel
+        .ids
+        .as_ref()
+        .map(|ids| {
+            ids.iter()
+                .map(|id| resolve(&proj.tasks, id).map(|t| t.id.clone()))
+                .collect::<Result<BTreeSet<_>>>()
+        })
+        .transpose()?;
+    let mut tasks: Vec<_> = proj
+        .tasks
+        .values()
+        .filter(|t| ids.as_ref().is_none_or(|ids| ids.contains(&t.id)))
+        .filter(|t| carries(t, &sel.fields, labels))
+        .collect();
+    tasks.sort_by_key(|t| t.num);
+    Ok(tasks)
+}
+
+fn export_fingerprint(
+    proj: &Projection,
+    selection: &ExportSelection,
+    labels: &[String],
+    to: Destination,
+    fields: &[Field],
+    csv: &str,
+) -> Result<String> {
+    // Include skipped rows and export timestamps as well as the actual CSV:
+    // another export changes eligibility without changing a task's seq.
+    // Render with all tasks so blocker changes are detected too.
+    let rows: Vec<_> = export_candidates(proj, selection, labels)?
+        .into_iter()
+        .map(|t| {
+            (
+                render::notion_row(t, &proj.tasks, fields),
+                t.exported.get(to.as_str()),
+            )
+        })
+        .collect();
+    let bytes = serde_json::to_vec(&(csv, rows, selection.all, selection.again))
+        .map_err(|e| Error::Usage(format!("couldn't fingerprint export: {e}")))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 /// The ledger as each export found it (ADR-007), to render a task's row as it

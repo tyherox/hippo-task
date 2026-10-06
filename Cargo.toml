@@ -1,6 +1,6 @@
 [package]
 name = "hippo-task"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 # std `File::lock` (the ledger's advisory lock) is stable since 1.89.
 # Clippy's `incompatible_msrv` lint holds the code to this version.
@@ -26,9 +26,10 @@ ulid = "1"
 chrono = "0.4"
 toml = { version = "1.1.6", default-features = false, features = ["std", "serde", "parse"] }
 # Image links, the way CommonMark does — code spans, escapes, <…> destinations.
-# No `html` feature: the CLI stores and prints the source, and never renders it.
-pulldown-cmark = { version = "0.13", default-features = false }
+# The opt-in UI renders a restricted event stream; the CLI still prints source.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 sha2 = "0.10"
+tiny_http = { version = "0.12", default-features = false }
 
 # Rules enforced by the compiler instead of by review (see AGENTS.md).
 [lints.rust]

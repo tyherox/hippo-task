@@ -551,7 +551,7 @@ fn apply_spans(text: &str, mut spans: Vec<(std::ops::Range<usize>, String)>) -> 
 // -------------------------------------------------------------------- files
 
 /// `media/<64 hex>.<ext>` with a known extension, or `None`.
-fn store_name(dest: &str) -> Option<String> {
+pub(crate) fn store_name(dest: &str) -> Option<String> {
     let dest = dest.strip_prefix("./").unwrap_or(dest);
     let file = dest.strip_prefix("media/")?;
     if file.contains('/') || file.contains('\\') {
@@ -559,6 +559,126 @@ fn store_name(dest: &str) -> Option<String> {
     }
     let (hash, ext) = file_name(file)?;
     Some(format!("media/{hash}.{ext}"))
+}
+
+/// Read one content-addressed file for the authenticated local preview. Refuse
+/// symlinks, non-files, mismatched bytes/types, and files over the configured cap.
+/// No user-supplied filesystem path reaches File::open.
+pub(crate) fn read_preview(store: &Store, name: &str) -> Result<(Vec<u8>, &'static str)> {
+    let (hash, ext) =
+        file_name(name).ok_or_else(|| Error::Usage("invalid store media filename".into()))?;
+    let media_dir = store.folder().join("media");
+    let path = media_dir.join(format!("{hash}.{ext}"));
+    let metadata = |path: &Path| {
+        fs::symlink_metadata(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Error::NotFound(format!("media/{name}"))
+            } else {
+                Error::io("couldn't inspect preview media", error)
+            }
+        })
+    };
+    if !metadata(&media_dir)?.is_dir() || !metadata(&path)?.is_file() {
+        return Err(Error::Usage(
+            "preview media must be a regular file inside the store's media directory".into(),
+        ));
+    }
+    let limits = store.config()?.media;
+    let kind = inspect_local(&path, name, &limits)?;
+    if kind.ext() != ext {
+        return Err(Error::Usage(
+            "preview media type does not match its extension".into(),
+        ));
+    }
+    let cap = if kind.is_video() {
+        limits.max_video_bytes
+    } else {
+        limits.max_image_bytes
+    };
+    let mut bytes = Vec::new();
+    File::open(&path)
+        .and_then(|file| file.take(cap.saturating_add(1)).read_to_end(&mut bytes))
+        .map_err(|error| Error::io("couldn't read preview media", error))?;
+    within_cap(name, bytes.len() as u64, kind, &limits)?;
+    if format!("{:x}", Sha256::digest(&bytes)) != hash {
+        return Err(Error::Usage(
+            "preview media bytes do not match their stored hash".into(),
+        ));
+    }
+    Ok((bytes, mime_of(&ext)))
+}
+
+/// Result of an explicitly selected local UI upload. Filenames and machine
+/// paths are deliberately absent; only the content-addressed link is retained.
+pub(crate) struct Upload {
+    pub path: String,
+    pub mime: &'static str,
+    pub bytes: u64,
+}
+
+pub(crate) fn upload(
+    store: &Store,
+    input: &mut impl Read,
+    length: Option<u64>,
+    limits: &MediaLimits,
+) -> Result<Upload> {
+    let max = limits.max_image_bytes.max(limits.max_video_bytes);
+    if length.is_some_and(|len| len > max) {
+        return Err(Error::Usage(format!(
+            "upload exceeds the {max}-byte media limit"
+        )));
+    }
+    let mut header = Vec::new();
+    input
+        .take(HEADER_LEN as u64)
+        .read_to_end(&mut header)
+        .map_err(|error| Error::io("couldn't read uploaded media", error))?;
+    let kind = sniff(&header).map_err(Error::Usage)?;
+    if let Some(len) = length {
+        within_cap("uploaded media", len, kind, limits)?;
+    }
+    let cap = if kind.is_video() {
+        limits.max_video_bytes
+    } else {
+        limits.max_image_bytes
+    };
+    let media_dir = store.folder().join("media");
+    match fs::symlink_metadata(&media_dir) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => {
+            return Err(Error::Usage(
+                "the store's media directory must be a regular directory".into(),
+            ))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(Error::io("couldn't inspect the media directory", error)),
+    }
+    let mut stream = header.as_slice().chain(input);
+    let copy = stream_to_temp(&mut stream, &media_dir, Some(cap), "uploaded media")?;
+    if length.is_some_and(|len| len != copy.len) {
+        return Err(Error::Usage(
+            "the media upload was incomplete — choose the file again".into(),
+        ));
+    }
+    let name = format!("{}.{}", copy.sha256, kind.ext());
+    let dest = media_dir.join(&name);
+    match fs::symlink_metadata(&dest) {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => {
+            return Err(Error::Usage(
+                "the stored media destination isn't a regular file".into(),
+            ))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(Error::io("couldn't inspect the media destination", error)),
+    }
+    let bytes = copy.len;
+    place(copy, &dest)?;
+    Ok(Upload {
+        path: format!("media/{name}"),
+        mime: mime_of(kind.ext()),
+        bytes,
+    })
 }
 
 fn file_name(name: &str) -> Option<(String, String)> {
@@ -857,28 +977,44 @@ impl Drop for TempCopy {
 fn copy_to_temp(src: &Path, dir: &Path, limit: Option<u64>) -> Result<TempCopy> {
     let mut input = File::open(src)
         .map_err(|error| Error::io(format!("couldn't read {}", src.display()), error))?;
+    stream_to_temp(&mut input, dir, limit, &src.display().to_string())
+}
+
+fn stream_to_temp(
+    input: &mut impl Read,
+    dir: &Path,
+    limit: Option<u64>,
+    name: &str,
+) -> Result<TempCopy> {
     fs::create_dir_all(dir)
         .map_err(|error| Error::io(format!("couldn't create {}", dir.display()), error))?;
+    let path = dir.join(format!(
+        ".tmp-{}-{}",
+        std::process::id(),
+        TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    // Claim the temporary path before owning its cleanup. A pre-existing file
+    // or symlink is never truncated or deleted on a failed create.
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| Error::io(format!("couldn't create {}", path.display()), error))?;
     // Declared before the output file, so on an early return the file is
     // closed before the copy deletes it (Windows can't delete an open file).
     let mut copy = TempCopy {
-        path: dir.join(format!(
-            ".tmp-{}-{}",
-            std::process::id(),
-            TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
-        )),
+        path,
         sha256: String::new(),
         len: 0,
         header: Vec::with_capacity(HEADER_LEN),
     };
-    let mut output = File::create(&copy.path)
-        .map_err(|error| Error::io(format!("couldn't create {}", copy.path.display()), error))?;
+    let mut output = file;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
         let n = input
             .read(&mut buf)
-            .map_err(|error| Error::io(format!("couldn't read {}", src.display()), error))?;
+            .map_err(|error| Error::io(format!("couldn't read {name}"), error))?;
         if n == 0 {
             break;
         }
@@ -886,8 +1022,7 @@ fn copy_to_temp(src: &Path, dir: &Path, limit: Option<u64>) -> Result<TempCopy> 
         if let Some(limit) = limit {
             if copy.len > limit {
                 return Err(Error::Usage(format!(
-                    "{} grew past {limit} bytes while it was being copied",
-                    src.display()
+                    "{name} grew past the {limit}-byte limit while it was being copied"
                 )));
             }
         }
@@ -1359,6 +1494,53 @@ mod tests {
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|name| name.starts_with(".tmp-"))
             .collect()
+    }
+
+    #[test]
+    fn an_upload_bounds_unknown_length_streams_and_cleans_up_read_failures() {
+        let (_dir, store) = temp_store("upload-stream");
+        let limits = MediaLimits {
+            max_image_bytes: 16,
+            max_video_bytes: 32,
+        };
+        let mut too_big = &b"GIF89a012345678901234567890123456789"[..];
+        assert!(matches!(
+            upload(&store, &mut too_big, None, &limits),
+            Err(Error::Usage(_))
+        ));
+        let media = store.folder().join("media");
+        assert_eq!(fs::read_dir(&media).unwrap().count(), 0);
+        let mut truncated = &b"GIF89a"[..];
+        assert!(matches!(
+            upload(&store, &mut truncated, Some(12), &limits),
+            Err(Error::Usage(_))
+        ));
+        assert_eq!(fs::read_dir(&media).unwrap().count(), 0);
+        struct Broken {
+            remaining: usize,
+        }
+        impl Read for Broken {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                if self.remaining == 0 {
+                    return Err(std::io::Error::other("lost connection"));
+                }
+                let n = out.len().min(self.remaining);
+                out[..n].fill(0);
+                if self.remaining == HEADER_LEN {
+                    out[..6].copy_from_slice(b"GIF89a");
+                }
+                self.remaining -= n;
+                Ok(n)
+            }
+        }
+        let mut broken = Broken {
+            remaining: HEADER_LEN,
+        };
+        assert!(matches!(
+            upload(&store, &mut broken, None, &MediaLimits::default()),
+            Err(Error::Io { .. })
+        ));
+        assert_eq!(fs::read_dir(&media).unwrap().count(), 0);
     }
 
     #[test]

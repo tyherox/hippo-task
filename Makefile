@@ -4,7 +4,7 @@
 # Builds use --locked: Cargo.lock is committed, so everyone (and CI) compiles
 # exactly the same dependency versions.
 
-.PHONY: setup build typecheck lint fmt test test-affected integrity verify doctor install demo play ui
+.PHONY: setup build typecheck lint fmt test test-affected integrity verify doctor install demo play ui playground-ui
 
 setup:          ## idempotent bootstrap: the toolchain components the gates use
 	rustup component add rustfmt clippy
@@ -49,5 +49,8 @@ demo:           ## self-running narrated demo of the real binary
 play:           ## interactive terminal playground that drives the real binary
 	./playground/play.sh
 
-ui:             ## local playground UI that drives the real binary
+ui:             ## optional board/list UI for this project's existing task store
+	cargo run --locked -- ui
+
+playground-ui:  ## scratch-store development playground (Live/Simulate)
 	python3 playground/serve.py

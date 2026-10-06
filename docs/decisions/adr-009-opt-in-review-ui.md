@@ -1,6 +1,9 @@
 # ADR-009 — An opt-in UI for reviewing tasks before export
 
-**Status:** Proposed — planning only · **Date:** 2026-10-06
+**Status:** Accepted for implementation · **Date:** 2026-10-06
+
+The user approved execution of this proposal ("Run it"), including the working
+defaults: save edits to HippoTask and export a Notion-ready CSV separately.
 
 ## Context
 
@@ -35,7 +38,7 @@ editor's protection against stale edits.
 
 ## Feature admission
 
-**Verdict: admitted for design within the scope below; implementation pending.**
+**Verdict: admitted for implementation within the scope below.**
 The user and pain come from the current request. The historical capsule is
 context, not a restriction overriding that request.
 
@@ -201,5 +204,68 @@ direct publishing, revisit the model and this decision first.
    README, command/JSON documentation where applicable, and CHANGELOG. Run
    `make doctor` before implementation and `make verify` before completion.
 
-This ADR records the proposed plan only. No UI, API, model, or export behavior
-has been implemented by writing it.
+This decision precedes the implementation; the release notes describe the
+delivered behavior.
+
+## Description preview amendment — 2026-10-06
+
+**Admitted, T1; conceptual integrity: preserves.** The user explicitly requested
+a markdown previewer for descriptions after trying the UI.
+
+- **User / pain:** a task reviewer needs to see formatting while editing,
+  without saving a draft just to inspect it.
+- **Fit / scope:** add Write / Preview controls to the shared description
+  editor, using the existing CommonMark parser with tables, task lists, and
+  strikethrough. Preview the current draft; retain its exact source on switching.
+- **Reversibility:** preview is read-only and transient, with no ledger events,
+  export bookkeeping, new task attributes, or persisted preferences.
+- **Failure:** show render/media errors without losing text; discard stale
+  responses after switching tasks or modes. Escape raw HTML, allow only explicit
+  HTTP(S)/mailto links, and never load remote images automatically. Serve only
+  authenticated, validated content-addressed files inside the store's media
+  directory, respecting existing media limits.
+- **Measurement:** verify unsaved formatted text, switching back to the source,
+  blank descriptions, local media, and script/link injection cases; ensure
+  preview leaves the ledger byte-for-byte unchanged.
+- **Cost:** reuse pulldown-cmark's HTML renderer behind a restricted event stream
+  and the local HTTP session. No rich-text editing, uploads, external Markdown
+  libraries, syntax highlighting, or separate document model.
+
+## Media picker amendment — 2026-10-06
+
+**Admitted, T1; conceptual integrity: preserves.** The user now asks to add media
+from the UI. This explicitly admits the file picker deferred above.
+
+- [x] **User:** the human reviewing tasks alongside coding agents; the same
+  audience as the [brief](../../.agents/product/product-brief.md) and this UI.
+- [x] **Pain:** attaching a screenshot or recording currently requires leaving
+  the editor for the CLI, even though the browser can already preview it.
+- [x] **Fit:** existing Task description and Store media files, per the
+  [domain map's canonical-model correction](../../.agents/product/domain-map.md)
+  and ADR-008. No attachment entity, new event, or alternate storage model.
+- [x] **Scope:** an Add media button opens a native file picker for one or more
+  supported images/videos. Upload each to the existing local store, insert
+  inline Markdown at the description cursor (append in Preview), and retain
+  normal Write / Preview and explicit Save behavior. Show progress and failures.
+- [x] **Reversibility:** choosing a file explicitly copies its bytes into local
+  storage. Removing its Markdown or discarding the draft removes the reference;
+  uploaded files remain in the store, consistent with existing CLI ingestion.
+  Do not delete potentially shared files. Explain this before file selection.
+- [x] **Failure:** enforce auth/origin, actual file signatures, configured image
+  and video limits, regular store paths, safe temporary cleanup, and deduplication.
+  Invalid/oversized files leave no stored file. Failed uploads retain the draft;
+  completed files in a batch remain inserted, and errors identify failed choices.
+  Disable Save while uploading; task switches cannot attach a late response to
+  another draft. Discard aborts an in-flight upload.
+- [x] **Measurement:** choose an image and video, preview both, save, and confirm
+  the CLI/export sees ordinary store media links. Test rejected files, bounds,
+  deduplication, no ledger writes until Save, and draft retention on failure.
+- [x] **Cost:** reuse the media streaming/hash/type/size pipeline and local HTTP
+  session. Add a bounded raw-byte upload route and per-draft upload state; no
+  multipart dependency, remote upload service, gallery, paste/drop interaction,
+  deletion, or transcoding. The [non-goals](../../.agents/product/non-goals.md)
+  still exclude a hosted platform or general asset manager.
+
+Selected file contents can contain private information; upload is user initiated
+and stays in their chosen local store. Original filenames and machine paths are
+not sent to the server or recorded in Markdown; use editable Image/Video captions.
