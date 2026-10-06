@@ -176,6 +176,11 @@ hippo-task --dir /path/to/project ui
   **Discard** abandons the unsaved draft. Enter saves a single-line row edit,
   Escape cancels it, and Ctrl/Cmd+Enter saves the open task panel. Drafts live
   only in the tab: save them before closing or restarting the UI.
+- An open task has a compact review list, **Previous / Next**, a task chooser,
+  and **Save & next**. Navigation follows the current filters and retains each
+  unsaved draft; Save & next advances only after a successful save. Alt+Left /
+  Alt+Right navigate when you're not typing, and Escape returns to the task
+  list. Related tasks are clickable from **Related tasks & history**.
 - Move cards between states with drag and drop or the status menu. Moving to
   Doing does not claim the task. Another worker's active claim prevents state
   changes; details remain editable.
@@ -193,13 +198,17 @@ The server listens only on `127.0.0.1` and requires its per-launch session token
 for task data and edits. Opening it never initializes a store. UI actions use
 `human:local` and a fresh session node, ignoring the launching agent's actor/node
 settings. No username, hostname, task draft, or browser preference is collected.
-Descriptions have **Write / Preview** controls. Preview renders your unsaved
+Descriptions have **Preview / Edit text** controls and open formatted when
+they contain text. Preview renders your unsaved
 Markdown, including headings, lists, tables, checkboxes, code, and stored images
-or video. Switch back to Write to continue editing; only **Save** updates the
+or video. Choose Edit text to continue editing; only **Save changes** updates the
 task. Raw HTML is displayed as text, and remote images are never fetched.
 
-Use **Add media** in the description editor to choose images or videos. Links
-are inserted at the cursor in Write, or appended in Preview. PNG, JPEG, GIF,
+Use **Add screenshots / files** or paste a copied screenshot while the task
+editor is focused. **Screenshots & files** shows the description's local media
+as thumbnails; click to enlarge, and close the viewer with its button or Escape.
+Links are inserted at the cursor in Edit text, or appended in Preview. Plain
+text pastes remain text. PNG, JPEG, GIF,
 WebP, MP4, MOV, and WebM use the existing configured limits (8 MiB per image and
 64 MiB per video by default). The UI shows upload progress and errors; Save
 becomes available when the upload finishes. Files are copied to the local store
@@ -212,6 +221,7 @@ draft leaves its uploaded files in the store, as with CLI media ingestion.
 ```bash
 make verify     # fmt --check · clippy -D warnings · tests · test-integrity  (what CI runs)
 make test       # also: make lint · make fmt · make doctor · make typecheck
+make test-ui    # browser behavior tests (Node.js 18+; no packages to install)
 make demo       # narrated demo that drives the real binary
 make play       # terminal playground: a REPL over the real binary, with identity switching to try contention
 make ui         # optional board/list UI for this project's configured task store

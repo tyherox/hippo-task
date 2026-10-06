@@ -33,7 +33,13 @@ else
 fi
 if cargo fmt --version >/dev/null 2>&1; then ok "rustfmt"; else miss "rustfmt — run: make setup"; fi
 if cargo clippy --version >/dev/null 2>&1; then ok "clippy"; else miss "clippy — run: make setup"; fi
-if command -v python3 >/dev/null 2>&1; then ok "python3: $(python3 --version)"; else warn "python3 — not needed for make verify, but \`make ui\` (the playground UI) needs it"; fi
+if command -v node >/dev/null 2>&1; then
+  have="$(node --version)"
+  if version_ge "${have#v}" "18.0.0"; then ok "node $have (UI behavior tests only)"; else miss "Node 18+ is needed for UI behavior tests"; fi
+else
+  miss "Node 18+ — needed for make verify's UI behavior tests, not the shipped UI"
+fi
+if command -v python3 >/dev/null 2>&1; then ok "python3: $(python3 --version)"; else warn "python3 — only make playground-ui needs it"; fi
 
 echo "doctor: repo"
 for f in Cargo.lock README.md AGENTS.md CHANGELOG.md scripts/check-test-integrity.sh; do

@@ -4,7 +4,7 @@
 # Builds use --locked: Cargo.lock is committed, so everyone (and CI) compiles
 # exactly the same dependency versions.
 
-.PHONY: setup build typecheck lint fmt test test-affected integrity verify doctor install demo play ui playground-ui
+.PHONY: setup build typecheck lint fmt test test-ui test-affected integrity verify doctor install demo play ui playground-ui
 
 setup:          ## idempotent bootstrap: the toolchain components the gates use
 	rustup component add rustfmt clippy
@@ -25,6 +25,9 @@ lint:           ## formatting + clippy; warnings are errors, incl. the no-panic 
 test:           ## the whole suite: model/fold/render unit tests, store, ops, CLI contract, docs
 	cargo test --locked
 
+test-ui:        ## browser logic tests (Node 18+; no npm dependencies)
+	node --test ui/app.test.cjs
+
 test-affected:  ## fast subset (small crate: it's the whole suite)
 	cargo test --locked
 
@@ -34,6 +37,7 @@ integrity:      ## deterministic gate: block silent test-weakening vs git (no-op
 verify:         ## the composite gate CI runs — must pass before anyone says "done"
 	@$(MAKE) -s lint
 	@$(MAKE) -s test
+	@$(MAKE) -s test-ui
 	@$(MAKE) -s integrity
 	@echo "verify: PASS"
 

@@ -31,3 +31,65 @@
 .media-tools button{font-size:12px;min-height:32px;padding:5px 10px}
 .media-tools .help{margin:0;flex:1;min-width:140px;overflow-wrap:anywhere}
 .media-error{color:#9f2f2d;background:#fff7f6;border:1px solid #f1d4cd;border-radius:4px;padding:9px 10px;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0}
+
+/* Review mode keeps the task list useful and gives the document room to read. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+#workspace{scroll-margin-top:16px}
+.workspace.has-editor{grid-template-columns:minmax(230px,28%) minmax(0,1fr);gap:24px}
+.task-rail{position:sticky;top:16px;max-height:calc(100dvh - 32px);overflow:auto;padding:0 8px 8px 0;scrollbar-width:thin}
+.rail-heading{display:flex;justify-content:space-between;align-items:center;margin:0;padding:14px 12px;color:var(--muted);font-size:10px;letter-spacing:.1em;position:sticky;top:0;background:#fbfbfa;z-index:1}
+.rail-heading span{font-variant-numeric:tabular-nums}
+.review-task{display:block;width:100%;text-align:left;white-space:normal;border:1px solid transparent;background:transparent;padding:14px 12px;margin-bottom:5px;border-radius:6px;font-weight:400;scroll-margin-top:48px}
+.review-task:hover{background:var(--paper);border-color:#dfe3da}
+.review-task.active{background:#edf3ec;border-color:#b9cbb5}
+.review-task-meta{display:flex;justify-content:space-between;gap:12px;font-size:11px;color:var(--muted);margin-bottom:6px;font-variant-numeric:tabular-nums}
+.review-task-title{display:block;line-height:1.6;font-size:13px;font-weight:550;overflow-wrap:anywhere;text-wrap:pretty}
+.review-task-note{display:block;color:#916b37;font-size:11px;margin-top:6px}
+#editor{display:flex;flex-direction:column;height:calc(100dvh - 32px);max-height:calc(100dvh - 32px);overflow:hidden}
+.editor-heading{flex-shrink:0;padding:14px 24px;border-bottom:0}
+.editor-heading h2{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.task-navigation{padding:0 24px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
+.review-position{font-size:12px;font-weight:600;display:flex;gap:12px;flex-wrap:wrap;justify-content:space-between;margin-bottom:10px;font-variant-numeric:tabular-nums}
+.review-position span{color:var(--muted);font-size:11px;font-weight:400}
+.review-controls{display:flex;gap:8px;align-items:center}
+.review-controls button{font-size:12px}
+.task-chooser{flex:1;min-width:0}
+.task-chooser select{width:100%;text-overflow:ellipsis;font-size:12px;background:#fafbf8}
+.editor-body{padding:24px;overflow-y:auto;min-height:0;flex:1;scrollbar-width:thin}
+.editor-body .form-field>span,.description-heading label{font-size:12px;color:#596153}
+#editor-title{min-height:72px;resize:vertical;font-size:17px;line-height:1.55;font-weight:550;letter-spacing:-.2px}
+.editor-actions{position:static;flex-shrink:0;padding:14px 24px;flex-wrap:wrap}
+.editor-actions button{font-size:12px}
+.editor-actions .save-label{flex-basis:100%;font-size:11px}
+.editor-actions [data-discard]{margin-right:auto;background:transparent;border-color:transparent;color:var(--muted);padding-left:0}
+.organize-task{margin:0 0 22px;padding:12px 0;border-top:0;border-bottom:1px solid var(--border)}
+.organize-task[open] summary{margin-bottom:16px}
+.organize-task .form-field:last-child{margin-bottom:4px}
+.screenshots-section{margin-bottom:26px;padding-bottom:20px;border-bottom:1px solid var(--border)}
+.screenshots-section h3{font-size:13px;font-weight:600;margin:0}
+#attachment-count{font-weight:400;color:var(--muted)}
+#add-media{font-size:12px;padding:5px 10px;min-height:32px}
+.attachment-gallery{display:flex;gap:10px;overflow-x:auto;padding:5px 3px 8px;scrollbar-width:thin}
+.attachment-thumbnail{display:flex;flex-direction:column;flex:0 0 150px;width:150px;white-space:normal;padding:0;overflow:hidden;text-align:left;background:#fafbf8;border-color:#dfe3da;min-height:0}
+.attachment-thumbnail img{display:block;width:100%;height:94px;object-fit:contain;background:#f1f2ee}
+.attachment-thumbnail>span:last-child{padding:7px 9px;font-size:11px;line-height:1.45;font-weight:400;overflow-wrap:anywhere}
+.video-thumbnail{display:grid;place-items:center;height:94px;color:var(--green)}
+.attachment-help{margin-top:8px;padding:0;border:0}
+.attachment-help summary{font-size:11px;font-weight:400;color:var(--muted)}
+.description-heading{margin-bottom:12px}
+.description-switch button{font-size:12px;min-height:32px}
+.description-field .help{margin-bottom:10px}
+#description-source{min-height:340px;font-size:14px;line-height:1.75}
+.markdown-preview{max-height:none;min-height:80px;overflow:visible;border:0;padding:4px 0;background:transparent;font-size:14px;line-height:1.8}
+.markdown-preview h2{font-size:19px;margin-top:1.8em}
+.preview-media img,.preview-media video{max-height:440px}
+.related-task{display:block;white-space:normal;text-align:left;width:100%;font-size:12px;line-height:1.6;margin-bottom:6px}
+.related-task span{color:var(--muted)}
+footer details{margin:0;padding:0;border:0;max-width:65%}footer summary{font-size:11px;font-weight:400}#store-path{display:block;max-width:100%;margin-top:6px}
+#media-dialog{width:min(1240px,calc(100vw - 32px));padding:20px}
+#media-dialog .dialog-heading{margin-bottom:16px}
+#media-viewer-title{font-size:15px;overflow-wrap:anywhere;letter-spacing:0}
+#media-viewer-content img,#media-viewer-content video{display:block;width:100%;max-height:calc(90dvh - 100px);object-fit:contain}
+button:active:not(:disabled){transform:translateY(1px)}
+@media(max-width:900px){.workspace.has-editor{grid-template-columns:220px minmax(0,1fr);gap:16px}.editor-body{padding:18px}.editor-heading,.editor-actions{padding:12px 18px}.task-navigation{padding:0 18px 14px}.review-position span{flex-basis:100%}.review-controls button{padding:6px 8px}}
+@media(max-width:700px){.workspace.has-editor{display:block}.has-editor #tasks{display:none}#editor{position:fixed;inset:0;height:100dvh;max-height:100dvh;border:0;border-radius:0;box-shadow:none;z-index:5}.editor-body{padding:20px}.editor-actions{padding-bottom:max(14px,env(safe-area-inset-bottom))}.editor-actions button{font-size:12px}.editor-actions [data-discard]{flex-basis:100%;text-align:left}.task-navigation{padding-bottom:12px}.task-chooser select{min-width:0}.screenshots-section .description-heading{align-items:flex-start;gap:10px}footer details{max-width:100%}body:has(.has-editor) .app-header,body:has(.has-editor) .page-heading,body:has(.has-editor) .toolbar,body:has(.has-editor) .selection-bar,body:has(.has-editor) footer{display:none}}

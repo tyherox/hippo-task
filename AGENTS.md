@@ -111,4 +111,5 @@ Stability: within 0.7.x, fields are only ever added — never renamed or removed
 - **Docs are tested** (`tests/docs.rs`): a new command must appear in README.md, a new JSON field here, a version bump in CHANGELOG.md.
 - **Releasing** (binaries for macOS, Linux, and Windows): bump `version` in Cargo.toml (then `cargo update --workspace`), add its CHANGELOG section, and land both on `main` with CI green. Then push that one tag — `git tag v0.4.1 && git push origin v0.4.1`, never `git push --tags`. `.github/workflows/release.yml` checks the tag against Cargo.toml and the CHANGELOG, builds every target with `scripts/package.sh`, publishes the release, and installs it on each OS. Running the workflow by hand is a dry run.
 - **Don't over-engineer.** Full HLC, hash-chaining, compaction, sync, storage adapters, and hosted collaboration stay deferred until real use earns them. The optional local review UI is bounded by ADR-009.
-- Verbs: `make setup | build | typecheck | lint | fmt | test | test-affected | integrity | verify | doctor | install | demo | play | ui`.
+- UI behavior tests use Node 18+ without npm dependencies (`make test-ui`), and run in `make verify`. Node is not required by the shipped UI.
+- Verbs: `make setup | build | typecheck | lint | fmt | test | test-ui | test-affected | integrity | verify | doctor | install | demo | play | ui`.

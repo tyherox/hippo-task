@@ -4,7 +4,7 @@
 // Drafts stay in this tab; only an explicit Save reaches the local ledger.
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const statuses = {todo:"Todo", doing:"Doing", done:"Done", cancelled:"Cancelled"};
+const statuses = {todo:"To do", doing:"In progress", done:"Done", cancelled:"Cancelled"};
 const priorities = {none:"No priority", low:"Low", med:"Medium", high:"High", urgent:"Urgent"};
 let token = location.hash.slice(1);
 try {
@@ -19,7 +19,7 @@ const selected = new Set();
 let tasks = [], fields = [], changed = new Set(), active = null, inline = null, view = "board";
 let fieldFilters = {}, connected = false, refreshing = false, dragging = false, needsRender = true, toastTimer;
 let exportIds = [], previewData = null, previewVersion = 0, exporting = false;
-let descriptionRequest = null, descriptionMediaUrls = [];
+let descriptionRequest = null, descriptionMediaUrls = [], descriptionTimer;
 let mediaPicker = null, mediaLimits = {max_image_bytes:8 * 1024 * 1024,max_video_bytes:64 * 1024 * 1024};
 
 async function api(path, method = "GET", body, signal) {
@@ -67,7 +67,7 @@ function held(task) { return Boolean(task.lease?.active); }
 function tags(text) { return [...new Set(text.split(",").map((s) => s.trim()).filter(Boolean))]; }
 
 function newDraft(task) {
-  return {base:structuredClone(task), values:{title:task.title, body:task.body || "", state:task.state, priority:task.priority, assignee:task.assignee || "", labels:task.labels.join(", "), fields:{...task.fields}}, error:"", latest:null, saving:false, descriptionMode:"write", upload:null, mediaMessage:"", mediaErrors:[]};
+  return {base:structuredClone(task), values:{title:task.title, body:task.body || "", state:task.state, priority:task.priority, assignee:task.assignee || "", labels:task.labels.join(", "), fields:{...task.fields}}, error:"", latest:null, saving:false, descriptionMode:task.body?.trim() ? "preview" : "write", upload:null, mediaMessage:"", mediaErrors:[]};
 }
 function draftFor(id) {
   if (!drafts.has(id)) drafts.set(id, newDraft(taskById(id)));
@@ -124,7 +124,7 @@ async function refresh() {
       }
     }
     connected = true;
-    $("#connection").textContent = "Local session";
+    $("#connection").textContent = "On this computer";
     $("#connection").className = "connection online";
     $("#connection-error").hidden = true;
     renderFilters();
@@ -150,7 +150,7 @@ function renderFilters() {
   const labelSignature = JSON.stringify(allLabels);
   if (labelSelect.dataset.signature !== labelSignature) {
     labelSelect.dataset.signature = labelSignature;
-    labelSelect.innerHTML = options(Object.fromEntries(allLabels.map((label) => [label, label])), label, "All labels");
+    labelSelect.innerHTML = options(Object.fromEntries(allLabels.map((label) => [label, label])), label, "All tags");
   }
   const signature = JSON.stringify(fields);
   if ($("#field-filters").dataset.signature !== signature) {
@@ -175,10 +175,38 @@ function visibleTasks() {
   });
 }
 
+function reviewTasks() {
+  const visible = visibleTasks();
+  return view === "board" ? Object.keys(statuses).flatMap(state => visible.filter(task => task.state === state)) : visible;
+}
+function adjacentTask(direction) {
+  const review = reviewTasks(), index = review.findIndex(task => task.id === active);
+  return index < 0 ? null : review[index + direction] || null;
+}
+function navigateTask(direction) {
+  const next = adjacentTask(direction);
+  if (next) openTask(next.id);
+}
+async function saveAndNext() {
+  const id = active, next = adjacentTask(1);
+  if (!next || !id) return;
+  // Saving may remove the current task from a status/search filter.
+  const saved = await saveDraft(id);
+  if (saved && active === id) openTask(next.id);
+}
+function renderTaskNavigation() {
+  const navigation = $("#task-navigation");
+  if (!active || !navigation) return;
+  const review = reviewTasks(), index = review.findIndex(task => task.id === active);
+  navigation.innerHTML = `<div class="review-position">${active === "new" ? "New task" : index < 0 ? "Outside current filters" : `${index + 1} of ${review.length} tasks`}<span>Changes stay in this tab until you save.</span></div><div class="review-controls"><button data-navigate="-1" aria-label="Previous task" title="Previous task · Alt + Left" ${index <= 0 ? "disabled" : ""}>← Previous</button><label class="task-chooser"><span class="sr-only">Jump to task</span><select id="task-chooser"><option value="">Jump to task…</option>${review.map(task => `<option value="${escapeHtml(task.id)}" ${task.id === active ? "selected" : ""}>${task.num}. ${escapeHtml(task.title)}</option>`).join("")}</select></label><button data-navigate="1" aria-label="Next task" title="Next task · Alt + Right" ${index < 0 || index === review.length - 1 ? "disabled" : ""}>Next →</button></div>`;
+  const nextButton = $("#save-next");
+  if (nextButton) nextButton.disabled = !adjacentTask(1) || Boolean(drafts.get(active)?.saving || drafts.get(active)?.upload);
+}
+
 function badge(label, kind = "") { return `<span class="badge ${kind}">${escapeHtml(label)}</span>`; }
 function taskBadges(task) {
   return (task.priority !== "none" ? badge(priorities[task.priority], task.priority) : "") +
-    (task.blocked ? badge("Blocked", "blocked") : "") +
+    (task.blocked ? badge("Waiting on tasks", "blocked") : "") +
     (held(task) ? badge(`Held by ${task.lease.holder}`, "holder") : "") +
     (dirty(task.id) ? badge("Unsaved", "draft") : "") +
     task.labels.map((label) => badge(label)).join("") +
@@ -189,24 +217,28 @@ function stateSelect(task, draft) {
 }
 
 function renderTasks() {
+  const railScroll = $(".task-rail")?.scrollTop || 0;
   const focused = document.activeElement;
   const focusAttribute = ["data-open","data-inline","data-select","data-move"].find((attribute) => focused?.closest("#tasks") && focused.hasAttribute(attribute));
   const focusValue = focusAttribute ? focused.getAttribute(focusAttribute) : null;
   const visible = visibleTasks();
   $("#board-view").setAttribute("aria-pressed", String(view === "board"));
   $("#list-view").setAttribute("aria-pressed", String(view === "list"));
-  if (!visible.length) {
-    $("#tasks").innerHTML = `<div class="empty"><h2>${tasks.length ? "No tasks match these filters" : "Room for your next idea"}</h2><p>${tasks.length ? "Try another search or clear a filter." : "Create a task here, or let your agents add work from the CLI."}</p>${!tasks.length ? '<button data-action="new">+ Create a task</button>' : ''}</div>`;
+  if (active) {
+    $("#tasks").innerHTML = `<nav class="task-rail" aria-label="Tasks in this review"><p class="rail-heading">YOUR TASKS <span>${visible.length}</span></p>${reviewTasks().map(task => `<button class="review-task ${task.id === active ? "active" : ""}" data-open="${task.id}" ${task.id === active ? 'aria-current="true"' : ""}><span class="review-task-meta">Task ${task.num}<span>${dirty(task.id) ? "Unsaved" : statuses[task.state]}</span></span><span class="review-task-title">${escapeHtml(task.title)}</span>${task.blocked ? '<span class="review-task-note">Waiting on other tasks</span>' : ""}</button>`).join("") || '<p class="help">No tasks match. Adjust the filters above to continue.</p>'}</nav>`;
+    $(".task-rail").scrollTop = railScroll;
+    renderTaskNavigation();
+  } else if (!visible.length) {
+    $("#tasks").innerHTML = `<div class="empty"><h2>${tasks.length ? "No tasks match these filters" : "Room for your next idea"}</h2><p>${tasks.length ? "Try another search or clear a filter." : "Create a task to get started. You can add details and screenshots as you go."}</p>${!tasks.length ? '<button data-action="new">+ Create a task</button>' : ''}</div>`;
     renderSelection(); return;
-  }
-  if (view === "board") {
+  } else if (view === "board") {
     const columns = Object.entries(statuses).filter(([state]) => state !== "cancelled" || $("#show-cancelled").checked || $("#status-filter").value === "cancelled");
     $("#tasks").innerHTML = `<div class="board ${columns.length === 4 ? "four" : ""}">${columns.map(([state, label]) => {
       const cards = visible.filter((task) => task.state === state);
-      return `<section class="column" data-drop="${state}" aria-label="${label}"><div class="column-heading"><span class="state-mark ${state}"></span>${label}<span class="count">${cards.length}</span></div>${cards.map((task) => `<article class="card ${active === task.id ? "active" : ""}" data-task="${task.id}" draggable="${!held(task) && !dirty(task.id)}"><div class="card-top"><input type="checkbox" data-select="${task.id}" aria-label="Select task ${task.num}" ${selected.has(task.id) ? "checked" : ""}><span class="task-num">HT-${String(task.num).padStart(3,"0")}</span></div><button class="card-title" data-open="${task.id}">${escapeHtml(task.title)}</button>${task.body ? `<p class="card-description">${escapeHtml(task.body)}</p>` : ""}<div class="card-meta">${taskBadges(task)}</div><div class="card-bottom">${stateSelect(task)}<span class="export-label">${escapeHtml(exportLabel(task))}</span></div></article>`).join("") || '<p class="empty-column">No tasks here yet</p>'}</section>`;
+      return `<section class="column" data-drop="${state}" aria-label="${label}"><div class="column-heading"><span class="state-mark ${state}"></span>${label}<span class="count">${cards.length}</span></div>${cards.map((task) => `<article class="card ${active === task.id ? "active" : ""}" data-task="${task.id}" draggable="${!held(task) && !dirty(task.id)}"><div class="card-top"><input type="checkbox" data-select="${task.id}" aria-label="Select task ${task.num}" ${selected.has(task.id) ? "checked" : ""}><span class="task-num">Task ${task.num}</span></div><button class="card-title" data-open="${task.id}">${escapeHtml(task.title)}</button>${task.body ? `<p class="card-description">${escapeHtml(task.body)}</p>` : ""}<div class="card-meta">${taskBadges(task)}</div><div class="card-bottom">${stateSelect(task)}<span class="export-label">${escapeHtml(exportLabel(task))}</span></div></article>`).join("") || '<p class="empty-column">No tasks here yet</p>'}</section>`;
     }).join("")}</div>`;
   } else {
-    $("#tasks").innerHTML = `<div class="table-wrap"><table><thead><tr><th aria-label="Selection"></th><th>Task</th><th>Status</th><th>Priority</th><th>Assignee</th><th>Labels</th>${fields.map((field) => `<th>${escapeHtml(field.display_name)}</th>`).join("")}<th>Export</th><th>Actions</th></tr></thead><tbody>${visible.map(renderRow).join("")}</tbody></table></div>`;
+    $("#tasks").innerHTML = `<div class="table-wrap"><table><thead><tr><th aria-label="Selection"></th><th>Task</th><th>Status</th><th>Priority</th><th>Owner</th><th>Tags</th>${fields.map((field) => `<th>${escapeHtml(field.display_name)}</th>`).join("")}<th>Export</th><th>Actions</th></tr></thead><tbody>${visible.map(renderRow).join("")}</tbody></table></div>`;
     document.querySelectorAll(".edit-row").forEach((row) => {
       if (drafts.get(row.dataset.task)?.saving) row.querySelectorAll("input,select,button").forEach((input) => { input.disabled = true; });
     });
@@ -228,7 +260,7 @@ function fieldControl(field, value, extra = "") {
 function renderRow(task) {
   const d = inline === task.id ? draftFor(task.id) : null;
   const value = (key) => escapeHtml(d.values[key]);
-  return `<tr data-task="${task.id}" class="${d ? "edit-row" : ""}"><td><input type="checkbox" data-select="${task.id}" aria-label="Select task ${task.num}" ${selected.has(task.id) ? "checked" : ""}></td><td class="title-cell"><span class="task-num">HT-${String(task.num).padStart(3,"0")}</span>${d ? `<input class="title-input" data-input="title" aria-label="Task title" value="${value("title")}">` : `<button class="card-title row-title" data-open="${task.id}">${escapeHtml(task.title)}</button>`}<div class="row-sub">${task.blocked ? badge("Blocked","blocked") : ""}${held(task) ? badge(task.lease.holder,"holder") : ""}${dirty(task.id) ? badge("Unsaved","draft") : ""}</div></td><td>${stateSelect(task,d)}</td><td>${d ? `<select data-input="priority" aria-label="Priority">${options(priorities,d.values.priority)}</select>` : badge(priorities[task.priority],task.priority)}</td><td>${d ? `<input data-input="assignee" aria-label="Assignee" value="${value("assignee")}">` : escapeHtml(task.assignee || "—")}</td><td>${d ? `<input data-input="labels" aria-label="Labels, comma separated" value="${value("labels")}">` : task.labels.map((tag) => badge(tag)).join(" ") || "—"}</td>${fields.map((field) => `<td>${d ? fieldControl(field,d.values.fields[field.field] || "") : escapeHtml(task.fields[field.field] || "—")}</td>`).join("")}<td>${badge(exportLabel(task),exportState(task))}</td><td><div class="row-actions">${d ? `<button data-save="${task.id}" class="primary" ${d.saving ? "disabled" : ""}>${d.saving ? "Saving…" : "Save"}</button><button data-discard="${task.id}" ${d.saving ? "disabled" : ""}>Cancel</button>` : `<button data-inline="${task.id}">Edit</button>`}</div></td></tr>${d?.error ? `<tr class="row-error"><td colspan="${8 + fields.length}"><p role="alert">${escapeHtml(d.error)}</p><button data-open="${task.id}">Open task to compare</button></td></tr>` : ""}`;
+  return `<tr data-task="${task.id}" class="${d ? "edit-row" : ""}"><td><input type="checkbox" data-select="${task.id}" aria-label="Select task ${task.num}" ${selected.has(task.id) ? "checked" : ""}></td><td class="title-cell"><span class="task-num">Task ${task.num}</span>${d ? `<input class="title-input" data-input="title" aria-label="Task title" value="${value("title")}">` : `<button class="card-title row-title" data-open="${task.id}">${escapeHtml(task.title)}</button>`}<div class="row-sub">${task.blocked ? badge("Waiting on tasks","blocked") : ""}${held(task) ? badge(task.lease.holder,"holder") : ""}${dirty(task.id) ? badge("Unsaved","draft") : ""}</div></td><td>${stateSelect(task,d)}</td><td>${d ? `<select data-input="priority" aria-label="Priority">${options(priorities,d.values.priority)}</select>` : badge(priorities[task.priority],task.priority)}</td><td>${d ? `<input data-input="assignee" aria-label="Assignee" value="${value("assignee")}">` : escapeHtml(task.assignee || "—")}</td><td>${d ? `<input data-input="labels" aria-label="Labels, comma separated" value="${value("labels")}">` : task.labels.map((tag) => badge(tag)).join(" ") || "—"}</td>${fields.map((field) => `<td>${d ? fieldControl(field,d.values.fields[field.field] || "") : escapeHtml(task.fields[field.field] || "—")}</td>`).join("")}<td>${badge(exportLabel(task),exportState(task))}</td><td><div class="row-actions">${d ? `<button data-save="${task.id}" class="primary" ${d.saving ? "disabled" : ""}>${d.saving ? "Saving…" : "Save"}</button><button data-discard="${task.id}" ${d.saving ? "disabled" : ""}>Cancel</button>` : `<button data-inline="${task.id}">Edit</button>`}</div></td></tr>${d?.error ? `<tr class="row-error"><td colspan="${8 + fields.length}"><p role="alert">${escapeHtml(d.error)}</p><button data-open="${task.id}">Open task to compare</button></td></tr>` : ""}`;
 }
 
 function renderSelection() {
@@ -245,7 +277,7 @@ function renderSelection() {
   const countDrafts = dirtyIds().length;
   $("#draft-count").textContent = countDrafts ? `${countDrafts} unsaved ${countDrafts === 1 ? "draft" : "drafts"}` : "";
   const saveLabel = $(".save-label");
-  if (saveLabel && active) saveLabel.textContent = dirty(active) ? "Unsaved changes" : "Up to date";
+  if (saveLabel && active) saveLabel.textContent = dirty(active) ? "Unsaved changes" : "All changes saved";
   for (const button of document.querySelectorAll("[data-save]")) button.disabled = Boolean(drafts.get(button.dataset.save)?.saving || drafts.get(button.dataset.save)?.upload);
 }
 
@@ -256,18 +288,39 @@ function renderEditor() {
   if (!active) { $("#editor").innerHTML = ""; return; }
   const d = drafts.get(active), task = taskById(active) || d.base;
   const value = (key) => escapeHtml(d.values[key]);
-  $("#editor").innerHTML = `<div class="editor-heading"><h2>${active === "new" ? "New task" : `Task ${task.num}`}</h2><button data-action="close-editor" aria-label="Close task editor">Close</button></div><div class="editor-body">${d.error ? `<div class="notice error" role="alert">${escapeHtml(d.error)}</div>` : ""}${d.latest && dirty(active) ? `<div class="notice">This task has a newer saved version. Your draft is preserved.<details open><summary>Latest saved values</summary><dl class="comparison"><dt>Title</dt><dd>${escapeHtml(d.latest.title)}</dd><dt>Status / Priority</dt><dd>${statuses[d.latest.state]} / ${priorities[d.latest.priority]}</dd><dt>Assignee / Labels</dt><dd>${escapeHtml(d.latest.assignee || "Unassigned")} / ${escapeHtml(d.latest.labels.join(", ") || "None")}</dd>${fields.map((f) => `<dt>${escapeHtml(f.display_name)}</dt><dd>${escapeHtml(d.latest.fields[f.field] || "Not set")}</dd>`).join("")}<dt>Description</dt><dd>${escapeHtml(d.latest.body || "No description")}</dd></dl></details><button data-action="rebase" ${d.upload ? "disabled" : ""}>Keep my changes on latest</button></div>` : ""}<label class="form-field"><span>Title</span><input data-input="title" id="editor-title" value="${value("title")}" placeholder="What needs doing?" ${d.saving ? "disabled" : ""}></label><div class="form-pair"><label class="form-field"><span>Status</span><select data-input="state" ${held(task) || active === "new" || d.saving ? "disabled" : ""}>${options(statuses,d.values.state)}</select></label><label class="form-field"><span>Priority</span><select data-input="priority" ${d.saving ? "disabled" : ""}>${options(priorities,d.values.priority)}</select></label></div>${held(task) ? `<p class="help">Held by ${escapeHtml(task.lease.holder)}. You can edit details; status belongs to the holder.</p>` : ""}<label class="form-field"><span>Assignee</span><input data-input="assignee" value="${value("assignee")}" placeholder="Unassigned" ${d.saving ? "disabled" : ""}></label><label class="form-field"><span>Labels · separated by commas</span><input data-input="labels" value="${value("labels")}" placeholder="e.g. design, backend" ${d.saving ? "disabled" : ""}></label>${fields.map((field) => `<label class="form-field"><span>${escapeHtml(field.display_name)}</span>${fieldControl(field,d.values.fields[field.field] || "",d.saving ? "disabled" : "")}</label>`).join("")}${descriptionEditor(d)}${active !== "new" ? `<details><summary>Dependencies & activity</summary><div id="task-history">Loading activity…</div></details>` : ""}</div><div class="editor-actions"><span class="save-label">${dirty(active) ? "Unsaved changes" : "Up to date"}</span><button data-discard="${active}" ${d.saving ? "disabled" : ""}>Discard</button><button data-save="${active}" class="primary" ${d.saving ? "disabled" : ""}>${d.saving ? "Saving…" : "Save"}</button></div>`;
+  $("#editor").innerHTML = `
+    <div class="editor-heading"><h2 tabindex="-1" id="editor-heading">${active === "new" ? "New task" : `Task ${task.num}`}</h2><button data-action="close-editor" aria-label="Close task editor">Back to tasks</button></div>
+    <div id="task-navigation" class="task-navigation" aria-label="Review navigation"></div>
+    <div class="editor-body">
+      ${d.error ? `<div class="notice error" role="alert">${escapeHtml(d.error)}</div>` : ""}
+      ${d.latest && dirty(active) ? `<div class="notice">Someone updated this task. Your changes are still here.<details open><summary>Compare with the saved task</summary><dl class="comparison"><dt>Title</dt><dd>${escapeHtml(d.latest.title)}</dd><dt>Status / Priority</dt><dd>${statuses[d.latest.state]} / ${priorities[d.latest.priority]}</dd><dt>Owner / Tags</dt><dd>${escapeHtml(d.latest.assignee || "Unassigned")} / ${escapeHtml(d.latest.labels.join(", ") || "None")}</dd>${fields.map((f) => `<dt>${escapeHtml(f.display_name)}</dt><dd>${escapeHtml(d.latest.fields[f.field] || "Not set")}</dd>`).join("")}<dt>Description</dt><dd>${escapeHtml(d.latest.body || "No description")}</dd></dl></details><button data-action="rebase" ${d.upload ? "disabled" : ""}>Keep my edits and review</button></div>` : ""}
+      <label class="form-field"><span>Task title</span><textarea rows="2" data-input="title" id="editor-title" placeholder="What needs doing?" ${d.saving ? "disabled" : ""}>${value("title")}</textarea></label>
+      <div class="form-pair"><label class="form-field"><span>Status</span><select data-input="state" ${held(task) || active === "new" || d.saving ? "disabled" : ""}>${options(statuses,d.values.state)}</select></label><label class="form-field"><span>Priority</span><select data-input="priority" ${d.saving ? "disabled" : ""}>${options(priorities,d.values.priority)}</select></label></div>
+      ${held(task) ? `<p class="help">${escapeHtml(task.lease.holder)} is working on this task. You can edit its details; they control its status.</p>` : ""}
+      <details class="organize-task"><summary>Owner, tags & organization</summary><label class="form-field"><span>Owner</span><input data-input="assignee" value="${value("assignee")}" placeholder="Unassigned" ${d.saving ? "disabled" : ""}></label><label class="form-field"><span>Tags</span><input data-input="labels" value="${value("labels")}" placeholder="Separate tags with commas" ${d.saving ? "disabled" : ""}></label>${fields.map((field) => `<label class="form-field"><span>${escapeHtml(field.display_name)}</span>${fieldControl(field,d.values.fields[field.field] || "",d.saving ? "disabled" : "")}</label>`).join("")}</details>
+      ${screenshotsEditor()}
+      ${descriptionEditor(d)}
+      ${active !== "new" ? `<details><summary>Related tasks & history</summary><div id="task-history">Loading history…</div></details>` : ""}
+    </div>
+    <div class="editor-actions"><span class="save-label" role="status">${dirty(active) ? "Unsaved changes" : "All changes saved"}</span><button data-discard="${active}" ${d.saving ? "disabled" : ""}>Discard changes</button><button data-save="${active}" ${d.saving ? "disabled" : ""}>${d.saving ? "Saving…" : "Save changes"}</button>${active !== "new" ? '<button id="save-next" data-action="save-next" class="primary">Save & next →</button>' : ""}</div>`;
+  renderTaskNavigation();
   if (active !== "new") loadHistory(active);
-  if (d.descriptionMode === "preview") previewDescription();
+  previewDescription();
   renderUploadState(active);
 }
 
 function descriptionEditor(d) {
   const preview = d.descriptionMode === "preview";
-  return `<section class="description-field form-field"><div class="description-heading"><label for="description-source">Description · Markdown</label><div class="view-switch description-switch" role="group" aria-label="Description view"><button type="button" data-description-mode="write" aria-pressed="${!preview}" aria-controls="description-source">Write</button><button type="button" data-description-mode="preview" aria-pressed="${preview}" aria-controls="description-preview">Preview</button></div></div><textarea id="description-source" data-input="body" spellcheck="true" placeholder="Add context for the next person…" ${d.saving ? "disabled" : ""} ${preview ? "hidden" : ""}>${escapeHtml(d.values.body)}</textarea><div id="description-preview" class="markdown-preview" role="region" aria-label="Description preview" aria-live="polite" tabindex="0" ${preview ? "" : "hidden"}></div><div class="media-tools"><button type="button" id="add-media" data-action="add-media" aria-describedby="media-formats media-storage">+ Add media</button><input type="file" id="media-picker" aria-label="Choose images or videos" accept=".png,.jpg,.jpeg,.gif,.webp,.mp4,.mov,.webm,image/png,image/jpeg,image/gif,image/webp,video/mp4,video/quicktime,video/webm" multiple hidden><span id="media-status" class="help" role="status" hidden></span></div><p id="media-errors" class="media-error" role="alert" hidden></p><p id="media-formats" class="help">${escapeHtml(mediaHelp())}</p><p id="media-storage" class="help">Files are copied to this local store when added, even if you discard the draft. Save attaches the description to this task.</p></section>`;
+  return `<section class="description-field form-field"><div class="description-heading"><label for="description-source">Description</label><div class="view-switch description-switch" role="group" aria-label="Description view"><button type="button" data-description-mode="preview" aria-pressed="${preview}" aria-controls="description-preview">Preview</button><button type="button" data-description-mode="write" aria-pressed="${!preview}" aria-controls="description-source">Edit text</button></div></div><p id="description-help" class="help" ${preview ? "hidden" : ""}>Plain text works here. Use **bold**, - for a list, or - [ ] for a checklist. Preview shows the finished result.</p><textarea id="description-source" data-input="body" aria-describedby="description-help" spellcheck="true" placeholder="What should someone know about this task?" ${d.saving ? "disabled" : ""} ${preview ? "hidden" : ""}>${escapeHtml(d.values.body)}</textarea><div id="description-preview" class="markdown-preview" role="region" aria-label="Description preview" aria-live="polite" tabindex="0" ${preview ? "" : "hidden"}></div></section>`;
+}
+
+function screenshotsEditor() {
+  return `<section class="screenshots-section" aria-labelledby="screenshots-title"><div class="description-heading"><h3 id="screenshots-title">Screenshots & files <span id="attachment-count"></span></h3><button type="button" id="add-media" data-action="add-media" aria-describedby="media-storage">+ Add screenshots / files</button></div><div id="attachment-gallery" class="attachment-gallery" aria-live="polite"><p class="help">Loading attachments…</p></div><input type="file" id="media-picker" aria-label="Choose screenshots or videos" accept=".png,.jpg,.jpeg,.gif,.webp,.mp4,.mov,.webm,image/png,image/jpeg,image/gif,image/webp,video/mp4,video/quicktime,video/webm" multiple hidden><p class="help">Choose a file, or paste a copied screenshot while this task is open. Click a thumbnail to enlarge it.</p><p id="media-status" class="help" role="status" hidden></p><p id="media-errors" class="media-error" role="alert" hidden></p><details class="attachment-help"><summary>File types & storage</summary><p id="media-formats" class="help">${escapeHtml(mediaHelp())}</p><p id="media-storage" class="help">Files stay on this computer. Save changes to attach them to the task. Discarding changes does not delete the copied files.</p></details></section>`;
 }
 
 function clearDescriptionPreview() {
+  clearTimeout(descriptionTimer);
+  closeMediaViewer();
   descriptionRequest?.abort();
   descriptionRequest = null;
   for (const url of descriptionMediaUrls) URL.revokeObjectURL(url);
@@ -283,13 +336,15 @@ function renderUploadState(id) {
   if (active !== id || !$("#add-media")) return;
   const d = drafts.get(id);
   $("#add-media").disabled = d.saving || Boolean(d.upload);
-  $("#add-media").textContent = d.upload ? "Adding media…" : "+ Add media";
+  $("#add-media").textContent = d.upload ? "Adding files…" : "+ Add screenshots / files";
   $("#description-source").disabled = d.saving || Boolean(d.upload);
   $("#media-status").textContent = d.mediaMessage;
   $("#media-status").hidden = !d.mediaMessage;
   $("#media-errors").textContent = d.mediaErrors.join("\n");
   $("#media-errors").hidden = !d.mediaErrors.length;
   $("#media-formats").textContent = mediaHelp();
+  const nextButton = $("#save-next");
+  if (nextButton) nextButton.disabled = !adjacentTask(1) || d.saving || Boolean(d.upload);
   renderSelection();
 }
 
@@ -302,6 +357,48 @@ function chooseMedia() {
   mediaPicker = {id:active,d,offset:d.descriptionMode === "write" ? source.selectionEnd : d.values.body.length};
   $("#media-picker").value = "";
   $("#media-picker").click();
+}
+
+function pasteScreenshots(event) {
+  if (!active || !event.target.closest("#editor")) return;
+  const files = [...(event.clipboardData?.items || [])].filter(item => item.kind === "file" && item.type.startsWith("image/")).map(item => item.getAsFile()).filter(Boolean);
+  if (!files.length) return;
+  const d = drafts.get(active);
+  if (!d || d.saving || d.upload) return;
+  event.preventDefault();
+  const source = $("#description-source");
+  addMedia(files,{id:active,d,offset:d.descriptionMode === "write" ? source.selectionEnd : d.values.body.length});
+}
+
+function closeMediaViewer() {
+  const dialog = $("#media-dialog");
+  if (dialog?.open) dialog.close();
+}
+function openMediaViewer(button) {
+  const dialog = $("#media-dialog"), video = button.dataset.mediaType.startsWith("video/");
+  const element = document.createElement(video ? "video" : "img");
+  const caption = button.dataset.caption || (video ? "Video" : "Screenshot");
+  if (video) { element.controls = true; element.setAttribute("aria-label",caption); }
+  else element.alt = caption;
+  element.src = button.dataset.viewMedia;
+  $("#media-viewer-title").textContent = caption;
+  $("#media-viewer-content").replaceChildren(element);
+  dialog.showModal();
+}
+
+function addAttachmentThumbnail(gallery, url, type, caption) {
+  const button = document.createElement("button"), video = type.startsWith("video/");
+  button.type = "button"; button.className = "attachment-thumbnail";
+  button.dataset.viewMedia = url; button.dataset.mediaType = type; button.dataset.caption = caption;
+  button.setAttribute("aria-label",`Open ${video ? "video" : "screenshot"}: ${caption || "Attachment"}`);
+  if (!video) {
+    const image = document.createElement("img"); image.src = url; image.alt = "";
+    button.append(image);
+  } else {
+    const icon = document.createElement("span"); icon.className = "video-thumbnail"; icon.textContent = "▶ Video"; button.append(icon);
+  }
+  const label = document.createElement("span"); label.textContent = caption || (video ? "Video" : "Screenshot");
+  button.append(label); gallery.append(button);
 }
 
 async function addMedia(files, selection) {
@@ -337,7 +434,7 @@ async function addMedia(files, selection) {
           const source = $("#description-source");
           source.value = d.values.body;
           source.setSelectionRange(offset,offset);
-          if (d.descriptionMode === "preview") { clearDescriptionPreview(); previewDescription(); }
+          clearDescriptionPreview(); previewDescription();
         }
       } catch (error) {
         if (!current()) return;
@@ -364,25 +461,31 @@ function setDescriptionMode(mode) {
   $("#description-source").hidden = mode === "preview";
   $("#description-preview").hidden = mode !== "preview";
   for (const button of document.querySelectorAll("[data-description-mode]")) button.setAttribute("aria-pressed",String(button.dataset.descriptionMode === mode));
-  if (mode === "preview") previewDescription();
+  $("#description-help").hidden = mode === "preview";
+  previewDescription();
 }
 
 async function previewDescription() {
-  const panel = $("#description-preview"), source = drafts.get(active)?.values.body || "";
+  const panel = $("#description-preview"), gallery = $("#attachment-gallery"), source = drafts.get(active)?.values.body || "";
   const controller = new AbortController();
   descriptionRequest = controller;
   const current = () => descriptionRequest === controller && panel.isConnected;
   panel.classList.remove("preview-error");
   panel.setAttribute("aria-busy","true");
-  panel.textContent = source.trim() ? "Rendering preview…" : "Nothing to preview yet.";
+  panel.textContent = source.trim() ? "Loading description…" : "No description yet. Choose Edit text to add some context.";
+  gallery.innerHTML = '<p class="help">No screenshots yet. Add one when a picture would help explain the task.</p>';
+  $("#attachment-count").textContent = "";
   try {
     if (!source.trim()) return;
     const result = await api("/api/markdown/preview","POST",{markdown:source},controller.signal);
     if (!current()) return;
     // Only the server's restricted Markdown renderer supplies this HTML.
     panel.innerHTML = result.html;
+    const placeholders = [...panel.querySelectorAll("[data-media]")];
+    if (placeholders.length) gallery.replaceChildren();
+    $("#attachment-count").textContent = placeholders.length ? `(${placeholders.length})` : "";
     const mediaCache = new Map();
-    for (const placeholder of panel.querySelectorAll("[data-media]")) {
+    for (const placeholder of placeholders) {
       if (!current()) return;
       try {
         const name = placeholder.dataset.media;
@@ -401,6 +504,7 @@ async function previewDescription() {
         const {url,type} = mediaCache.get(name), video = type.startsWith("video/");
         const element = document.createElement(video ? "video" : "img");
         const caption = placeholder.dataset.caption;
+        addAttachmentThumbnail(gallery,url,type,caption || "");
         if (video) { element.controls = true; element.preload = "metadata"; element.setAttribute("aria-label",caption || "Description video"); }
         else element.alt = caption;
         const unavailable = () => {
@@ -416,12 +520,16 @@ async function previewDescription() {
         if (!current()) return;
         placeholder.classList.add("unavailable");
         placeholder.textContent = `${placeholder.dataset.caption || "Media"} — ${error.message}`;
+        const missing = document.createElement("p"); missing.className = "help";
+        missing.textContent = `${placeholder.dataset.caption || "Attachment"} could not be loaded. ${error.message}`;
+        gallery.append(missing);
       }
     }
   } catch (error) {
     if (!current()) return;
     panel.classList.add("preview-error");
-    panel.textContent = `Preview unavailable. ${error.message} Switch to Write to keep editing.`;
+    panel.textContent = `Preview unavailable. ${error.message} Choose Edit text to keep editing.`;
+    gallery.textContent = "Attachments could not be loaded. Your description is unchanged.";
   } finally {
     if (current()) panel.setAttribute("aria-busy","false");
   }
@@ -433,7 +541,7 @@ async function loadHistory(id) {
     if (active !== id || !$("#task-history")) return;
     const blockers = detail.relations.filter((r) => r.rel === "blocked-by").map((r) => taskById(r.task)).filter(Boolean);
     const historyRows = [...detail.events].reverse().slice(0,30);
-    $("#task-history").innerHTML = `${blockers.length ? `<p>Blocked by: ${blockers.map((t) => `#${t.num} ${escapeHtml(t.title)} (${statuses[t.state]})`).join("; ")}</p>` : "<p>No dependencies.</p>"}<ol>${historyRows.map((event) => `<li>${escapeHtml(event.actor)} · ${escapeHtml(event.type)}${event.applied ? "" : " (no change)"}<br>${escapeHtml(new Date(event.ts).toLocaleString())}<div class="history-value">${escapeHtml(Object.values(event.data || {}).map((v) => typeof v === "object" ? JSON.stringify(v) : v).join(" · "))}</div></li>`).join("")}</ol>`;
+    $("#task-history").innerHTML = `${blockers.length ? `<p>These tasks come first:</p>${blockers.map((t) => `<button class="related-task" data-open="${t.id}">Task ${t.num} · ${escapeHtml(t.title)} <span>(${statuses[t.state]})</span></button>`).join("")}` : "<p>No tasks need to be finished first.</p>"}<details><summary>Change history</summary><ol>${historyRows.map((event) => `<li>${escapeHtml(event.actor)} · ${escapeHtml(event.type)}${event.applied ? "" : " (no change)"}<br>${escapeHtml(new Date(event.ts).toLocaleString())}<div class="history-value">${escapeHtml(Object.values(event.data || {}).map((v) => typeof v === "object" ? JSON.stringify(v) : v).join(" · "))}</div></li>`).join("")}</ol></details>`;
   } catch (error) { if (active === id && $("#task-history")) $("#task-history").textContent = error.message; }
 }
 
@@ -446,6 +554,10 @@ function openTask(id) {
     else draftFor(id).latest = taskById(id).seq !== draftFor(id).base.seq ? taskById(id) : null;
   }
   renderTasks(); renderEditor();
+  $("#editor").scrollTop = 0;
+  $('#tasks [aria-current="true"]')?.scrollIntoView({block:"nearest"});
+  $("#workspace").scrollIntoView({block:"start"});
+  $("#editor-heading")?.focus({preventScroll:true});
 }
 function createTask() {
   if (!drafts.has("new")) drafts.set("new",newDraft({id:"new",seq:0,title:"",body:null,state:"todo",priority:"none",assignee:null,labels:[],fields:{},relations:[]}));
@@ -462,8 +574,8 @@ function discard(id) {
 
 async function saveDraft(id) {
   const d = drafts.get(id);
-  if (!d || d.saving || d.upload) return;
-  if (id !== "new" && !dirty(id)) { toast("No changes to save."); return; }
+  if (!d || d.saving || d.upload) return false;
+  if (id !== "new" && !dirty(id)) { toast("No changes to save."); return true; }
   d.saving = true; d.error = "";
   if (active === id) renderEditor();
   if (inline === id) renderTasks();
@@ -477,6 +589,7 @@ async function saveDraft(id) {
     if (inline === id) inline = null;
     toast(id === "new" ? "Task created." : "Changes saved to HippoTask.");
     await refresh(); renderTasks(); renderEditor();
+    return true;
   } catch (error) {
     d.error = error.message;
     if (error.kind === "stale") {
@@ -491,6 +604,7 @@ async function saveDraft(id) {
     if (inline === id) renderTasks();
     renderSelection();
   }
+  return false;
 }
 
 function rebaseDraft() {
@@ -615,6 +729,9 @@ document.addEventListener("click", (event) => {
   if (button.dataset.save) saveDraft(button.dataset.save);
   if (button.dataset.discard) discard(button.dataset.discard);
   if (button.dataset.descriptionMode) setDescriptionMode(button.dataset.descriptionMode);
+  if (button.dataset.navigate) navigateTask(Number(button.dataset.navigate));
+  if (button.dataset.viewMedia) openMediaViewer(button);
+  if (button.dataset.action === "save-next") saveAndNext();
   if (button.dataset.action === "add-media") chooseMedia();
   if (button.dataset.action === "new") createTask();
   if (button.dataset.action === "close-editor") { active = null; renderEditor(); renderTasks(); }
@@ -628,11 +745,17 @@ function inputDraft(event) {
   if (!d || d.saving) return;
   if (input.hasAttribute("data-input-field")) d.values.fields[input.dataset.inputField] = input.value;
   else d.values[input.dataset.input] = input.value;
+  if (input.dataset.input === "body" && id === active) {
+    clearDescriptionPreview();
+    descriptionTimer = setTimeout(previewDescription,400);
+  }
   renderSelection();
 }
+document.addEventListener("paste",pasteScreenshots);
 document.addEventListener("input",inputDraft);
 document.addEventListener("change", (event) => {
   const input = event.target;
+  if (input.id === "task-chooser") { if (input.value) openTask(input.value); return; }
   if (input.id === "media-picker") { const selection = mediaPicker; mediaPicker = null; addMedia([...input.files],selection); return; }
   inputDraft(event);
   if (input.dataset.select) { if (input.checked) selected.add(input.dataset.select); else selected.delete(input.dataset.select); renderSelection(); }
@@ -640,6 +763,14 @@ document.addEventListener("change", (event) => {
   if (input.hasAttribute("data-filter-field")) { fieldFilters[input.dataset.filterField] = input.value; renderTasks(); }
 });
 document.addEventListener("keydown", (event) => {
+  if (event.defaultPrevented || $("#media-dialog").open || $("#export-dialog").open) return;
+  const editing = event.target.closest("input,textarea,select,[contenteditable=true]");
+  if (active && !editing && event.altKey && ["ArrowLeft","ArrowRight"].includes(event.key)) {
+    event.preventDefault(); navigateTask(event.key === "ArrowLeft" ? -1 : 1); return;
+  }
+  if (active && !editing && event.key === "Escape") {
+    event.preventDefault(); active = null; renderEditor(); renderTasks(); return;
+  }
   const row = event.target.closest("tr.edit-row");
   if (row && event.target.tagName === "INPUT" && event.target.type !== "checkbox") {
     if (event.key === "Enter") { event.preventDefault(); saveDraft(row.dataset.task); }
@@ -682,6 +813,8 @@ $("#export-dialog").addEventListener("cancel", (event) => { if (exporting) event
 $("#include-again").onchange = previewExport;
 $("#refresh-preview").onclick = previewExport;
 $("#save-export").onclick = saveExport;
+$("#close-media").onclick = closeMediaViewer;
+$("#media-dialog").addEventListener("close", () => $("#media-viewer-content").replaceChildren());
 window.addEventListener("beforeunload", (event) => { if (dirtyIds().length || exporting) { event.preventDefault(); event.returnValue = ""; } });
 window.addEventListener("focus",refresh);
 setInterval(() => { if (!document.hidden) refresh(); },5000);

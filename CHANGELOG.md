@@ -6,16 +6,22 @@ Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://
 
 ### Added
 
+- Task review navigation with a compact task list, Previous / Next, a task
+  chooser, and Save & next that advances only after successful saves. Drafts
+  survive task switches; existing descriptions open in formatted preview.
+- A screenshots/files strip, enlarged media viewer, and clipboard screenshot
+  paste using the existing authenticated local upload path. Plain text pastes
+  and explicit-save behavior are preserved.
 - `hippo-task ui`: explicitly launched local board/list UI, packaged in the
   binary. Search/filter, create tasks, edit rows or a shared task panel, and
   move cards between states while respecting existing claims. Saves append
   ordinary events as `human:local`; no task or event schema change.
 - Conditional human edits protect against stale metadata and preserve drafts
   on failure; description-only edits retain paragraph merging.
-- Description **Write / Preview** switch renders unsaved Markdown, tables,
+- Description **Preview / Edit text** switch renders unsaved Markdown, tables,
   task lists, and authenticated store images/video. Preview records nothing,
   escapes raw HTML, and never loads external images.
-- **Add media** in the description editor selects local images/videos, copies
+- **Add screenshots / files** in the task editor selects local images/videos, copies
   validated files into the store, and inserts Markdown links into the draft.
   Shows upload progress and errors, reuses configured media limits and
   deduplication, and attaches files to the task only on explicit Save.
@@ -28,6 +34,9 @@ Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://
 
 ### Changed
 
+- Wider task reader, plain-language labels, and expandable organization and
+  workspace details for nontechnical reviewers. `make verify` also runs
+  dependency-free browser logic tests with Node 18+ (development only).
 - `make ui` opens the real-project UI; `make playground-ui` retains the scratch
   development playground. Direct Notion publishing and general spreadsheet CSV
   profiles remain deferred.
