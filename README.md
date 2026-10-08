@@ -6,7 +6,7 @@
 
 It's the reference implementation of the open agent-native task schema (`docs/schema-design.md`).
 
-**Status: 0.7.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
+**Status: 0.7.1 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
 
 *History:* HippoTask started as a TypeScript prototype of a universal interop schema with platform adapters — preserved at git tag `v0-typescript`, with its research (the 10-platform schema study, provider scorecards) in `docs/archive/typescript-v0/`. This Rust core narrows the first release to local, multi-agent task memory; platform adapters come back once sync is earned.
 
@@ -62,6 +62,7 @@ hippo-task init --folder ~/tasks/my-project   # …or in another folder, outside
 
 ```bash
 hippo-task guide                                 # the protocol agents follow (or install it: hippo-task skill --to <folder>)
+hippo-task whoami                                # who commands act as: actor@node (agents check this before claiming)
 hippo-task add "Write the RFC" --priority high --label docs --body "Scope: the v1 schema"
 hippo-task list                                  # every task, by number
 hippo-task list --state todo --sort priority     # also: --mine, --blocked, --sort created|updated
@@ -157,6 +158,7 @@ In Notion, **Import → CSV** turns the file into a new database; to add rows to
 
 - `HIPPO_ACTOR` / `--actor` — *who*: `agent:claude`, `human:ana`. Default: `human:local`.
 - `HIPPO_NODE` / `--node` — *which window or session*. Default: `local`.
+- `hippo-task whoami` shows who commands act as (`--json`: `{"actor", "node", "default"}`). It works under an agent allowlist that permits only `hippo-task` commands, where `echo "$HIPPO_NODE"` is refused.
 - **A claim belongs to actor + node.** Give every concurrent worker its own node, and two windows of the same agent can't both claim one task. Agents (`agent:…` actors) *must* set a node — without one, every command exits 2 and says how:
 
 ```bash

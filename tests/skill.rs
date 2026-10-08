@@ -167,3 +167,20 @@ fn running_it_again_updates_its_files_and_leaves_others_alone() {
     assert_eq!(fs::read_to_string(folder.join("notes.md")).unwrap(), "mine");
     assert!(run.stdout.contains("SKILL.md"), "{run:#?}");
 }
+
+#[test]
+fn the_identity_check_is_one_a_narrow_allowlist_permits() {
+    // A Claude Code session allowed only `Bash(hippo-task:*)` can't run
+    // `echo "$HIPPO_ACTOR…"` or `printenv` (ADR-014 amendment).
+    let (_dir, folder) = written("skill-identity");
+    let skill_md = fs::read_to_string(folder.join("SKILL.md")).unwrap();
+    assert!(skill_md.contains("hippo-task whoami --json"), "{skill_md}");
+    assert!(
+        !skill_md.contains("echo \"$HIPPO"),
+        "an identity check narrow allowlists refuse"
+    );
+    assert!(
+        !skill_md.contains("claude-win-1"),
+        "a node name two agents could both copy"
+    );
+}

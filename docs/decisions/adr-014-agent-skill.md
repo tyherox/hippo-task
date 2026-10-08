@@ -44,3 +44,12 @@ Claude Code hooks cover identity. A `SessionStart` hook receives the session's `
 - The node name `claude-<8 characters>` is drawn from a random session id, not from anything about the person or machine, and is recorded only when someone installs the hook. Clearing or resuming a session starts a new session id and a new node. `session-end` gives back the old node's claims first.
 - A session killed without a clean exit still strands its claims, as today: `list --held` shows the quiet holder and a person reclaims it (ADR-003).
 - The docs tests apply: `hippo-task skill` and `hippo-task hook` appear in README.md, and the skill's JSON keys in AGENTS.md.
+
+## Amendment — 2026-10-09: an identity check agents can run
+**Context.** In the contention test (two headless Claude Code sessions, allowed `Bash(hippo-task:*)` plus file tools), the guide's check, `echo "$HIPPO_ACTOR@$HIPPO_NODE"`, was refused: Claude Code blocks variable expansion under a narrow allowlist, and `printenv` was refused too. Both agents tried it; one spent five calls and read its node off its own rejected claim. An agent that can't confirm its identity may set one from the guide's example (`claude-win-1`). Two agents doing that share a node, so they are one worker and claims stop keeping them apart. And an agent with nothing set doesn't fail: it acts as `human:local@local`, like every other unidentified window.
+
+**Decision.**
+1. **`hippo-task whoami`** prints who commands act as: `agent:claude@claude-7c488009`. `--json` prints `{"actor", "node", "default"}`; `default: true` means no actor was given, so commands act as `human:local`. It needs no store, reads nothing about the machine, and an `agent:` actor without a node exits 2, as every command does. It runs under the same allowlist as any other `hippo-task` command.
+2. **The guide checks identity with `whoami --json`** and sets one only when `default` is true. It never offers a node name to copy; it asks for one no other window or session uses. It says to keep that node for the whole session, because a claim belongs to the node that took it. The binary's own hint drops its `claude-1` example for the same reason.
+
+**Alternatives.** Printing the identity from the SessionStart hook into the agent's context: it covers Claude Code only and costs every session tokens, while agents without hooks still couldn't check. Rewording the guide alone: no command every agent may run shows the identity.

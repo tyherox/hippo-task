@@ -2,9 +2,23 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
-## [Unreleased]
+## [0.7.1] - 2026-10-09 — internal release
+
+### Added
+
+- `hippo-task whoami` (ADR-014 amendment): who commands act as —
+  `agent:claude@claude-7c488009`; `--json` prints `{"actor", "node",
+  "default"}`. Agents can run it under an allowlist that permits only
+  `hippo-task` commands, where the guide's old check
+  (`echo "$HIPPO_ACTOR@$HIPPO_NODE"`) and `printenv` are refused.
 
 ### Changed
+
+- The agent guide (and so the skill) checks identity with `whoami --json`,
+  sets one only when nothing is set, never offers a node name to copy, and
+  says to keep one node for the whole session. The missing-node error drops
+  its `HIPPO_NODE=claude-1` example for the same reason: two agents that copy
+  one name share a node and stop blocking each other.
 
 - The review UI shows what a saved task still misses from the project's
   format in its editor, in plain words ("This project's task format also asks

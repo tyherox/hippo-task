@@ -92,6 +92,9 @@ enum Cmd {
     },
     /// Print the protocol agents follow to coordinate through hippo-task.
     Guide,
+    /// Show who commands act as: the actor and node from --actor/--node or
+    /// HIPPO_ACTOR/HIPPO_NODE. Agents: check this before claiming work.
+    Whoami,
     /// Install the protocol as an Agent Skill: agents load it only when they
     /// work on tasks. Re-run it after upgrading hippo-task.
     Skill {
@@ -385,6 +388,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
     match &cli.cmd {
         Cmd::Guide => return guide_out(&mut out, json),
         Cmd::Skill { to } => return skill_out(&mut out, json, to),
+        Cmd::Whoami => return whoami_out(&mut out, json, cli.actor.clone(), cli.node.clone()),
         Cmd::Hook { event } => {
             let who = (cli.actor.clone(), cli.node.clone());
             return hook_out(json, *event, cli.dir.as_deref(), who);
@@ -427,7 +431,12 @@ fn run(cli: Cli) -> Result<(), Failure> {
 
     match cli.cmd {
         // Handled above; listed so this match stays exhaustive.
-        Cmd::Init { .. } | Cmd::Guide | Cmd::Skill { .. } | Cmd::Hook { .. } | Cmd::Ui { .. } => {}
+        Cmd::Init { .. }
+        | Cmd::Guide
+        | Cmd::Skill { .. }
+        | Cmd::Whoami
+        | Cmd::Hook { .. }
+        | Cmd::Ui { .. } => {}
         Cmd::Add {
             title,
             priority,
@@ -890,6 +899,35 @@ fn hook_out(
             ops::release_all(&store, &ctx)?;
         }
     }
+    Ok(())
+}
+
+/// `whoami`: who commands act as (ADR-014 amendment). Needs no store; an
+/// agent without a node is refused here as everywhere else.
+fn whoami_out(
+    out: &mut impl Write,
+    json: bool,
+    actor: Option<String>,
+    node: Option<String>,
+) -> Result<(), Failure> {
+    // No actor given: commands act as the privacy-preserving default.
+    let default = actor.is_none();
+    let ctx = Ctx::new(actor, node, 0)?;
+    if json {
+        print_json(
+            out,
+            &serde_json::json!({ "actor": ctx.actor, "node": ctx.node, "default": default }),
+        )?;
+    } else if default {
+        writeln!(
+            out,
+            "{}@{} — the default: nothing is set. Agents: set HIPPO_ACTOR and a HIPPO_NODE unique to this session (see `hippo-task guide`).",
+            ctx.actor, ctx.node
+        )?;
+    } else {
+        writeln!(out, "{}@{}", ctx.actor, ctx.node)?;
+    }
+    out.flush()?;
     Ok(())
 }
 

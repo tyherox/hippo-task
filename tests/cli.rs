@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{bare, cmd, ok, tasks, TempDir, CLAUDE, CODEX, HUMAN};
+use common::{bare, cmd, ok, tasks, Run, TempDir, CLAUDE, CODEX, HUMAN};
 use serde_json::Value;
 use std::io::Read;
 use std::process::{Child, Stdio};
@@ -801,6 +801,79 @@ fn append_bytes(dir: &TempDir, bytes: &[u8]) {
 }
 
 // ---------------------------------------------------------------- review fixes (0.1.0)
+
+#[test]
+fn whoami_says_who_commands_act_as_without_a_store() {
+    // ADR-014 amendment: the identity check an agent can run under an
+    // allowlist that permits only `hippo-task` commands.
+    let dir = TempDir::new("cli-whoami");
+    let run = |env: &[(&str, &str)], args: &[&str]| {
+        let mut c = bare();
+        c.arg("whoami").args(args).current_dir(dir.path());
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        let out = c.output().unwrap();
+        Run {
+            code: out.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+    };
+    let named = [
+        ("HIPPO_ACTOR", "agent:claude"),
+        ("HIPPO_NODE", "claude-7c488009"),
+    ];
+    let set = run(&named, &["--json"]);
+    assert_eq!(set.code, 0, "{set:#?}");
+    assert_eq!(
+        set.json(),
+        serde_json::json!({"actor": "agent:claude", "node": "claude-7c488009", "default": false})
+    );
+    assert_eq!(run(&named, &[]).stdout, "agent:claude@claude-7c488009\n");
+    // Flags count as much as the environment.
+    let flags = run(&[], &["--actor", "agent:codex", "--node", "cx-1", "--json"]);
+    assert_eq!(flags.json()["actor"], "agent:codex");
+    assert_eq!(flags.json()["default"], false);
+
+    // Nothing set: the privacy-preserving default, and the output says so.
+    let unset = run(&[], &["--json"]);
+    assert_eq!(
+        unset.json(),
+        serde_json::json!({"actor": "human:local", "node": "local", "default": true})
+    );
+    let text = run(&[], &[]).stdout;
+    assert!(text.starts_with("human:local@local"), "{text}");
+    assert!(text.contains("HIPPO_ACTOR"), "says how to set one: {text}");
+
+    // An agent without a node is refused, as by every other command.
+    let nodeless = run(&[("HIPPO_ACTOR", "agent:claude")], &["--json"]);
+    assert_eq!(nodeless.code, 2, "{nodeless:#?}");
+    assert!(nodeless.json_error()["message"]
+        .as_str()
+        .unwrap()
+        .contains("HIPPO_NODE"));
+    assert!(
+        !dir.path().join(".hippotask").exists(),
+        "whoami needs no store and creates none"
+    );
+}
+
+#[test]
+fn the_missing_node_hint_offers_no_name_to_copy() {
+    // Two agents that copy one example name share a node: one worker.
+    let dir = TempDir::new("cli-node-hint");
+    let out = bare()
+        .args(["whoami"])
+        .current_dir(dir.path())
+        .env("HIPPO_ACTOR", "agent:claude")
+        .output()
+        .unwrap();
+    let message = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(message.contains("HIPPO_NODE"), "{message}");
+    assert!(!message.contains("HIPPO_NODE=claude-1"), "{message}");
+    assert!(message.contains("unique"), "{message}");
+}
 
 #[test]
 fn agents_must_name_their_node() {
