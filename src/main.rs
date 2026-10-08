@@ -7,13 +7,14 @@
 
 use clap::{Parser, Subcommand};
 use hippo_task::error::Error;
+use hippo_task::hook;
 use hippo_task::media::Anchor;
 use hippo_task::model::{Priority, State, Task};
 use hippo_task::ops::{
     self, Changes, Ctx, Destination, ExportSelection, Filter, NewTask, ReclaimTarget, Sort,
 };
 use hippo_task::render::{
-    self, who, DetailView, ErrorView, ExportView, FieldsView, ReleaseView, TaskView,
+    self, who, DetailView, ErrorView, ExportView, FieldsView, FormatView, ReleaseView, TaskView,
 };
 use hippo_task::setup::{self, Choice, Place, Setup};
 use hippo_task::store::Store;
@@ -22,9 +23,9 @@ use std::io::{self, BufWriter, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// The Claude Code hook `init` suggests, so a window's tasks go back when its
-/// session ends (ADR-005).
-const SESSION_END_HOOK: &str = r#"{ "hooks": { "SessionEnd": [ { "hooks": [ { "type": "command", "command": "hippo-task release --all" } ] } ] } }"#;
+/// The Claude Code hooks `init` suggests: each session gets its own identity,
+/// and its tasks go back when it ends (ADR-014).
+const SESSION_HOOKS: &str = r#"{ "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "hippo-task hook session-start" } ] } ], "SessionEnd": [ { "hooks": [ { "type": "command", "command": "hippo-task hook session-end" } ] } ] } }"#;
 
 const AFTER_HELP: &str = "\
 Task ids: a number (3), a full ULID, or at least 4 trailing characters of one.
@@ -36,7 +37,8 @@ Exit codes: 0 ok · 1 io (ledger unreadable, unwritable, or locked)
             5 stale (description changed since --base; re-read and redo)
 
 --json: stdout is one JSON document; stderr is JSON lines ({\"warning\":…} / {\"error\":…}).
-Agents: run `hippo-task guide` for the coordination protocol (AGENTS.md §A).";
+Agents: run `hippo-task guide` for the coordination protocol (AGENTS.md §A),
+  or install it once as a skill: `hippo-task skill --to <skills folder>`.";
 
 #[derive(Parser)]
 #[command(
@@ -90,6 +92,21 @@ enum Cmd {
     },
     /// Print the protocol agents follow to coordinate through hippo-task.
     Guide,
+    /// Install the protocol as an Agent Skill: agents load it only when they
+    /// work on tasks. Re-run it after upgrading hippo-task.
+    Skill {
+        /// The agent's skills folder, e.g. .claude/skills (this project) or
+        /// ~/.claude/skills (every project). Writes <FOLDER>/hippo-task/.
+        #[arg(long, value_name = "FOLDER")]
+        to: PathBuf,
+    },
+    /// For Claude Code hooks (reads the hook's JSON on stdin; prints nothing):
+    /// `session-start` gives the session its own identity, `session-end` gives
+    /// back what it holds.
+    Hook {
+        #[arg(value_enum)]
+        event: HookEvent,
+    },
     /// Create a task.
     Add {
         /// What needs doing.
@@ -142,9 +159,22 @@ enum Cmd {
         #[arg(long, value_enum)]
         sort: Option<Sort>,
     },
+    /// Tasks that share the most distinctive words with a text, best first —
+    /// run it with what you're about to file, before `add` (any state; marked
+    /// duplicates skipped).
+    Similar {
+        /// The title and description you're about to file.
+        text: String,
+        /// How many to show.
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+    },
     /// Show the fields this project declares (in its config.toml), their
     /// allowed values, and how many tasks use each.
     Fields,
+    /// Show this project's task format (in its config.toml): how to write
+    /// tasks, the description template, and required fields and sections.
+    Format,
     /// Export tasks for another tool. `export notion` writes the CSV Notion
     /// imports; with --out it writes a file and remembers what it exported.
     Export {
@@ -293,6 +323,15 @@ enum Cmd {
     },
 }
 
+/// The Claude Code hook events `hook` handles (ADR-014).
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum HookEvent {
+    /// Export HIPPO_ACTOR and HIPPO_NODE for this session, unless already set.
+    SessionStart,
+    /// Give back everything this session holds.
+    SessionEnd,
+}
+
 /// Why `run` stopped early. A closed stdout (`hippo-task list | head -1`) is not a
 /// failure — the reader simply stopped listening.
 enum Failure {
@@ -345,6 +384,11 @@ fn run(cli: Cli) -> Result<(), Failure> {
     // still read the guide.
     match &cli.cmd {
         Cmd::Guide => return guide_out(&mut out, json),
+        Cmd::Skill { to } => return skill_out(&mut out, json, to),
+        Cmd::Hook { event } => {
+            let who = (cli.actor.clone(), cli.node.clone());
+            return hook_out(json, *event, cli.dir.as_deref(), who);
+        }
         Cmd::Init {
             here,
             folder,
@@ -383,7 +427,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
 
     match cli.cmd {
         // Handled above; listed so this match stays exhaustive.
-        Cmd::Init { .. } | Cmd::Guide | Cmd::Ui { .. } => {}
+        Cmd::Init { .. } | Cmd::Guide | Cmd::Skill { .. } | Cmd::Hook { .. } | Cmd::Ui { .. } => {}
         Cmd::Add {
             title,
             priority,
@@ -446,12 +490,35 @@ fn run(cli: Cli) -> Result<(), Failure> {
                 }
             }
         }
+        Cmd::Similar { text, limit } => {
+            let tasks = ops::similar(&store, &text, limit)?;
+            if json {
+                let folder = store.folder();
+                let views: Vec<TaskView> = tasks
+                    .iter()
+                    .map(|t| TaskView::new(t, now, folder))
+                    .collect();
+                print_json(&mut out, &views)?;
+            } else {
+                for t in &tasks {
+                    writeln!(out, "{}", render::list_line(t, now))?;
+                }
+            }
+        }
         Cmd::Fields => {
             let report = ops::fields(&store)?;
             if json {
                 print_json(&mut out, &FieldsView::new(&report))?;
             } else {
                 write!(out, "{}", render::fields_text(&report))?;
+            }
+        }
+        Cmd::Format => {
+            let config = store.config()?;
+            if json {
+                print_json(&mut out, &FormatView::new(&config))?;
+            } else {
+                write!(out, "{}", render::format_text(&config))?;
             }
         }
         Cmd::Export {
@@ -765,6 +832,97 @@ fn guide_out(out: &mut impl Write, json: bool) -> Result<(), Failure> {
     Ok(())
 }
 
+/// `hook session-start | session-end`, run by Claude Code (ADR-014). Prints
+/// nothing: a SessionStart hook's output would land in the agent's context.
+/// `who` is the identity the person launched the session with, if any.
+fn hook_out(
+    json: bool,
+    event: HookEvent,
+    dir: Option<&Path>,
+    who: (Option<String>, Option<String>),
+) -> Result<(), Failure> {
+    let mut stdin = String::new();
+    io::stdin()
+        .read_to_string(&mut stdin)
+        .map_err(|e| Error::io("couldn't read the hook input", e))?;
+    let input = hook::parse(&stdin)?;
+    let given = |v: Option<String>| v.filter(|v| !v.trim().is_empty());
+    let (actor, node) = (given(who.0), given(who.1));
+    match event {
+        HookEvent::SessionStart => {
+            let Some(env_file) = std::env::var_os("CLAUDE_ENV_FILE") else {
+                return Err(Error::Usage(
+                    "hook session-start needs CLAUDE_ENV_FILE, which Claude Code sets for SessionStart hooks — add this command as one in your settings.json".into(),
+                )
+                .into());
+            };
+            let lines = hook::exports(&input, actor.is_some(), node.is_some());
+            hook::append(Path::new(&env_file), &lines)?;
+        }
+        HookEvent::SessionEnd => {
+            // Run in every project, so a project without tasks is no error.
+            let folder = match dir {
+                Some(dir) => Some(store_folder(Some(dir))?),
+                None => {
+                    let start = match input.cwd.clone().filter(|cwd| cwd.is_dir()) {
+                        Some(cwd) => cwd,
+                        None => current_folder()?,
+                    };
+                    setup::find(&start)?
+                }
+            };
+            let Some(folder) = folder else {
+                return Ok(());
+            };
+            let store = if json {
+                Store::in_folder(folder)
+                    .on_warning(|w| eprintln!("{}", serde_json::json!({ "warning": w })))
+            } else {
+                Store::in_folder(folder)
+            };
+            let actor = actor.unwrap_or_else(|| hook::ACTOR.to_string());
+            let node = node.unwrap_or_else(|| hook::node(&input));
+            let ctx = Ctx::new(
+                Some(actor),
+                Some(node),
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+            ops::release_all(&store, &ctx)?;
+        }
+    }
+    Ok(())
+}
+
+/// `skill --to <folder>`: write the Agent Skill (ADR-014).
+fn skill_out(out: &mut impl Write, json: bool, to: &Path) -> Result<(), Failure> {
+    // Absolute, so the report means the same thing wherever it's read.
+    let to = std::path::absolute(to)
+        .map_err(|e| Error::io(format!("couldn't resolve {}", to.display()), e))?;
+    let (folder, files) = setup::write_skill(&to)?;
+    if json {
+        print_json(out, &serde_json::json!({ "skill": folder, "files": files }))?;
+    } else {
+        let names: Vec<String> = files
+            .iter()
+            .filter_map(|f| f.strip_prefix(&folder).ok())
+            .map(|f| f.display().to_string())
+            .collect();
+        writeln!(
+            out,
+            "✓ Wrote the hippo-task skill to {} ({})",
+            folder.display(),
+            names.join(", ")
+        )?;
+        writeln!(
+            out,
+            "  Agents that read skills from {} load it in their next session. Re-run this after upgrading hippo-task.",
+            to.display()
+        )?;
+    }
+    out.flush()?;
+    Ok(())
+}
+
 /// `init`: choose where the project's tasks live, set it up, and tell the
 /// person what to do next. `asked` is (--here, --folder, --keep-in-git).
 fn init_out(
@@ -849,22 +1007,33 @@ fn init_text(out: &mut impl Write, s: &Setup) -> Result<(), Failure> {
     writeln!(out, "Next:")?;
     writeln!(
         out,
-        "  • Tell your agents. Add this line to the project's AGENTS.md (or CLAUDE.md):"
+        "  • Give your agents the skill — they load it only when they work on tasks:"
     )?;
     writeln!(
         out,
-        "      This project tracks tasks with hippo-task; run `hippo-task guide` before you start."
+        "      hippo-task skill --to .claude/skills    (commit it; other agents: their skills folder)"
     )?;
     writeln!(
         out,
-        "  • Launch each agent window with its own identity, for example:"
+        "    and add this line to the project's AGENTS.md (or CLAUDE.md):"
     )?;
     writeln!(
         out,
-        "      HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude"
+        "      Tasks are coordinated with hippo-task: use its skill, or run `hippo-task guide` if you have none."
     )?;
-    writeln!(out, "  • So a window's tasks go back when its session ends, add this to .claude/settings.local.json:")?;
-    writeln!(out, "      {SESSION_END_HOOK}")?;
+    writeln!(
+        out,
+        "  • Claude Code: give each session its own identity, and its tasks back when it ends — add to .claude/settings.json:"
+    )?;
+    writeln!(out, "      {SESSION_HOOKS}")?;
+    writeln!(
+        out,
+        "  • Other agents: launch each window with its own identity (HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude)"
+    )?;
+    writeln!(
+        out,
+        "    and run `hippo-task release --all` from its exit hook."
+    )?;
     Ok(())
 }
 

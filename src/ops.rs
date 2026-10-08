@@ -15,9 +15,11 @@
 use crate::config::{Config, Field};
 use crate::error::{Error, Result};
 use crate::fold::{self, Projection};
+use crate::format;
 use crate::media::{self, Anchor};
 use crate::model::{Event, EventKind, Lease, Priority, RelType, State, Task};
 use crate::render::{self, hold_status, who};
+use crate::similar;
 use crate::store::{Store, Tx};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -114,16 +116,22 @@ pub fn add(store: &Store, ctx: &Ctx, new: NewTask) -> Result<Task> {
         .map(|l| required("label", l))
         .collect::<Result<Vec<_>>>()?;
     let assignee = optional("assignee", new.assignee.as_deref())?;
+    // A body or fields can't be written without the config; a bare title can,
+    // and then a broken config only costs the format check (ADR-012).
+    let config = if new.body.is_some() || !new.fields.is_empty() {
+        Ok(store.config()?)
+    } else {
+        store.config()
+    };
     // Images are copied before the ledger is locked, so a large file doesn't
     // hold up other writers (ADR-008).
-    let body = match new.body.as_deref() {
-        Some(text) => Some(stored_body(store, text, &Anchor::Cwd)?),
-        None => None,
+    let body = match (new.body.as_deref(), &config) {
+        (Some(text), Ok(config)) => Some(ingested_body(store, text, &Anchor::Cwd, config)?),
+        _ => None,
     };
-    let fields = if new.fields.is_empty() {
-        Vec::new() // no fields, no need to read the config
-    } else {
-        checked_fields(&store.config()?, &new.fields)?
+    let fields = match &config {
+        Ok(config) if !new.fields.is_empty() => checked_fields(config, &new.fields)?,
+        _ => Vec::new(),
     };
 
     let id = Ulid::new().to_string();
@@ -146,7 +154,51 @@ pub fn add(store: &Store, ctx: &Ctx, new: NewTask) -> Result<Task> {
         events.push(ctx.event(&mut tx, &id, set));
     }
     let ledger = tx.commit(events)?;
-    task_in(fold::fold(&ledger.events), &id)
+    let proj = fold::fold(&ledger.events);
+    warn_same_title(store, &proj.tasks, &id);
+    let task = task_in(proj, &id)?;
+    warn_format(store, config.as_ref(), &task);
+    Ok(task)
+}
+
+/// After a write that shapes a task: one warning per gap in the project's
+/// format (ADR-012). The write has happened, so nothing here may fail it —
+/// a config that can't be read is a warning too.
+fn warn_format(store: &Store, config: std::result::Result<&Config, &Error>, task: &Task) {
+    match config {
+        Ok(config) => {
+            for gap in format::gaps(config, task) {
+                store.warn(&gap);
+            }
+        }
+        Err(e) => store.warn(&format!(
+            "couldn't check {} against this project's task format: {e}",
+            task.handle()
+        )),
+    }
+}
+
+/// ADR-013: an open task with the same title (ignoring case, punctuation and
+/// spacing) is almost surely the same work. The new task stays — recurring
+/// work legitimately repeats — but the agent hears about the other one.
+fn warn_same_title(store: &Store, tasks: &BTreeMap<String, Task>, id: &str) {
+    let Some(new) = tasks.get(id) else { return };
+    let key = similar::same_title_key(&new.title);
+    let mut same: Vec<&Task> = tasks
+        .values()
+        .filter(|t| t.id != new.id && !t.state.is_closed())
+        .filter(|t| similar::same_title_key(&t.title) == key)
+        .collect();
+    same.sort_by_key(|t| t.num);
+    if let Some(other) = same.first() {
+        store.warn(&format!(
+            "{} has the same title as open task {} — if it's the same work, add a note there and mark this one: hippo-task update {} --duplicate-of {}",
+            new.handle(),
+            other.handle(),
+            new.num,
+            other.num
+        ));
+    }
 }
 
 /// One `--field` argument, `name=value`, split and trimmed.
@@ -275,9 +327,14 @@ fn update_inner(
     }
     let title = optional("title", changes.title.as_deref())?;
     let assignee = optional("assignee", changes.assignee.as_deref())?;
-    let mut body = match changes.body.as_deref() {
-        Some(text) => Some(stored_body(store, text, &Anchor::Cwd)?),
-        None => None,
+    // The description and fields are what a format checks (ADR-012), and both
+    // need the config anyway: read it once, only when one of them changes.
+    let shapes =
+        changes.body.is_some() || !changes.fields.is_empty() || !changes.clear_fields.is_empty();
+    let config = if shapes { Some(store.config()?) } else { None };
+    let mut body = match (changes.body.as_deref(), &config) {
+        (Some(text), Some(config)) => Some(ingested_body(store, text, &Anchor::Cwd, config)?),
+        _ => None,
     };
     let label_add = changes
         .label_add
@@ -294,11 +351,6 @@ fn update_inner(
         .iter()
         .map(|f| required("field", f))
         .collect::<Result<Vec<_>>>()?;
-    let config = if changes.fields.is_empty() && clear_fields.is_empty() {
-        None // no fields involved, no need to read the config
-    } else {
-        Some(store.config()?)
-    };
     let set_fields = match &config {
         Some(config) if !changes.fields.is_empty() => checked_fields(config, &changes.fields)?,
         _ => Vec::new(),
@@ -427,7 +479,11 @@ fn update_inner(
         .map(|kind| ctx.event(&mut tx, &task.id, kind))
         .collect();
     let ledger = tx.commit(events)?;
-    task_in(fold::fold(&ledger.events), &task.id)
+    let task = task_in(fold::fold(&ledger.events), &task.id)?;
+    if let Some(config) = &config {
+        warn_format(store, Ok(config), &task);
+    }
+    Ok(task)
 }
 
 // ------------------------------------------------------ start / release
@@ -653,7 +709,8 @@ pub fn describe(
     anchor: &Anchor,
     base: Option<u64>,
 ) -> Result<Task> {
-    let submitted = stored_body(store, markdown, anchor)?;
+    let config = store.config()?;
+    let submitted = ingested_body(store, markdown, anchor, &config)?;
     let mut tx = store.begin()?;
     let task = resolve(&fold::fold(tx.events()).tasks, id)?.clone();
     let body = match base {
@@ -662,14 +719,20 @@ pub fn describe(
     };
     let event = ctx.event(&mut tx, &task.id, EventKind::SetBody { body });
     let ledger = tx.commit(vec![event])?;
-    task_in(fold::fold(&ledger.events), &task.id)
+    let task = task_in(fold::fold(&ledger.events), &task.id)?;
+    warn_format(store, Ok(&config), &task);
+    Ok(task)
 }
 
-/// Normalize, copy images, and refuse an empty result. The config read is
-/// what supplies the size caps; it does not take the ledger lock.
-fn stored_body(store: &Store, markdown: &str, anchor: &Anchor) -> Result<String> {
-    let limits = store.config()?.media;
-    finish_body(media::ingest(store, markdown, anchor, &limits)?)
+/// Normalize, copy images, and refuse an empty result. The config supplies
+/// the size caps; reading it does not take the ledger lock.
+fn ingested_body(
+    store: &Store,
+    markdown: &str,
+    anchor: &Anchor,
+    config: &Config,
+) -> Result<String> {
+    finish_body(media::ingest(store, markdown, anchor, &config.media)?)
 }
 
 fn finish_body(text: String) -> Result<String> {
@@ -869,6 +932,26 @@ fn mentions(t: &Task, term: &str) -> bool {
         || t.body
             .as_deref()
             .is_some_and(|body| media::searchable(body).contains(term))
+}
+
+/// The tasks sharing the most distinctive words with `text`, best first, at
+/// most `limit` (ADR-013). Any state — the original may be done — but not
+/// tasks already marked duplicate.
+pub fn similar(store: &Store, text: &str, limit: usize) -> Result<Vec<Task>> {
+    let text = required("text", text)?;
+    if limit == 0 {
+        return Err(Error::Usage("--limit must be at least 1".into()));
+    }
+    let tasks: Vec<Task> = fold::fold(&store.read()?.events)
+        .tasks
+        .into_values()
+        .collect();
+    let found: Vec<Task> = similar::rank(&tasks, &text, limit)
+        .into_iter()
+        .cloned()
+        .collect();
+    media::warn_about(store, &found, false);
+    Ok(found)
 }
 
 /// Ready to pick up: open, not blocked, and nobody holds it. That includes

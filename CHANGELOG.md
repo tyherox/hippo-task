@@ -6,6 +6,44 @@ Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://
 
 ### Added
 
+- `hippo-task similar "<text>"` (ADR-013): the tasks sharing the most
+  distinctive words with what you're about to file, best first — rare words
+  count most, identifiers like `session_token` stay whole, any state, marked
+  duplicates skipped. `--json` prints task objects, like `list`. Replayed on a
+  real 228-task backlog, it ranked the original of every known duplicate first.
+  `add` also warns when an open task already has the same title (ignoring case
+  and punctuation), and still creates it.
+- A task format (ADR-012): `[format]` in the store's `config.toml` declares a
+  guide for writing tasks, a description template, required fields, and
+  required sections. `hippo-task format` shows it (`--json`: `config`, `guide`,
+  `template`, `required_fields`, `required_sections`). `add`, `desc`, and an
+  `update` of the description or a field warn once per gap, naming the fix —
+  nothing is refused. The UI starts new tasks from the template and marks
+  required fields; its state gains `format`.
+- `hippo-task skill --to <folder>` (ADR-014) writes the agent guide as an
+  Agent Skill (`hippo-task/SKILL.md` plus `references/json.md`), generated from
+  the installed binary: agents load a two-line description at startup and the
+  protocol only when they work on tasks, instead of reading the guide every
+  session. Any agent that reads the agentskills.io format can use it.
+- `hippo-task hook session-start | session-end` (ADR-014), opt-in Claude Code
+  hooks: each session gets its own identity (`agent:claude` on node
+  `claude-<8 characters of its session id>`, through `$CLAUDE_ENV_FILE`), and
+  gives back what it holds when it ends. An identity the person launched with
+  is kept; a project without tasks is left alone. `init` suggests them.
+
+- Bulk UI editing for status, priority, owner, tags and declared fields, with
+  Shift-click selection, per-task results, and conditional undo. Unsaved drafts,
+  active claims and concurrent changes stay protected; uncertain saves stop the
+  batch rather than being retried automatically. Unassigning or clearing a field
+  is an explicit menu choice, never a blank value. List rows show who holds a
+  task.
+- `make integrity` also guards the UI behavior tests (`ui/*.test.cjs`) against
+  removed assertions and newly skipped tests.
+- A compact list-first workspace, status groups, sorting, sidebar views,
+  collapsible filters and a persistent detail panel. The list remains selectable
+  while reviewing descriptions and screenshots. Keyboard shortcuts include
+  search, new task, select-all in the list, save and task navigation.
+
 - Task review navigation with a compact task list, Previous / Next, a task
   chooser, and Save & next that advances only after successful saves. Drafts
   survive task switches; existing descriptions open in formatted preview.
@@ -34,6 +72,11 @@ Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://
 
 ### Changed
 
+- The agent guide (`guide`, AGENTS.md section A) no longer describes the review
+  UI's internal HTTP API — that moved to section B, for agents changing the UI.
+  It tells agents to look for similar tasks before filing, to read the task
+  format, and how to pass their identity when their shell doesn't keep
+  variables between commands.
 - Wider task reader, plain-language labels, and expandable organization and
   workspace details for nontechnical reviewers. `make verify` also runs
   dependency-free browser logic tests with Node 18+ (development only).

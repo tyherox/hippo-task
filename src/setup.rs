@@ -48,19 +48,25 @@ pub struct Pointer {
 /// The store for the project containing `start`: the nearest `.hippotask/` in
 /// `start` or a folder above it — never climbing out of a git repository.
 pub fn discover(start: &Path) -> Result<PathBuf> {
+    find(start)?.ok_or_else(|| Error::Usage(
+        "no task store here or in any folder above it — a person chooses where this project's tasks live by running `hippo-task init`".into(),
+    ))
+}
+
+/// Like [`discover`], but a project without a store is `None` rather than an
+/// error — for callers that run everywhere, like a session's exit hook.
+pub fn find(start: &Path) -> Result<Option<PathBuf>> {
     // Rust note: `ancestors()` yields `start` itself, then each parent up to `/`.
     for dir in start.ancestors() {
         let marker = dir.join(DIR);
         if marker.is_dir() {
-            return follow(&marker);
+            return follow(&marker).map(Some);
         }
         if dir.join(".git").exists() {
             break; // a repository's root: a store above it belongs to something else
         }
     }
-    Err(Error::Usage(
-        "no task store here or in any folder above it — a person chooses where this project's tasks live by running `hippo-task init`".into(),
-    ))
+    Ok(None)
 }
 
 /// `.hippotask/` is the store itself — unless it holds a pointer to one elsewhere.
@@ -300,6 +306,92 @@ pub fn guide() -> String {
         (Some(start), Some(end)) if start < end => AGENTS[start..end].trim_end().to_string(),
         _ => AGENTS.trim_end().to_string(),
     }
+}
+
+// ------------------------------------------------------------------ skill
+
+/// The skill's name — and its folder's: the Agent Skills spec requires both
+/// to match (agentskills.io/specification).
+pub const SKILL_NAME: &str = "hippo-task";
+
+/// What an agent reads at startup to decide when to load the skill (ADR-014).
+/// Under the spec's 1024 characters, with no `"` — it's quoted YAML.
+const SKILL_DESCRIPTION: &str = "Coordinates work through this project's hippo-task ledger: find ready tasks, claim one, leave notes, finish it or hand it back, and file new tasks without duplicates, in the project's own task format. Use when picking up, claiming, finishing, or filing tasks, or when the user mentions tasks, the backlog, a task number, or hippo-task.";
+
+/// The skill's files, relative to its folder, generated from the guide
+/// (AGENTS.md section A) so they can't drift from this binary: `SKILL.md`
+/// holds the protocol, and `references/json.md` the JSON shapes — read only
+/// when an agent parses something unusual.
+pub fn skill_files() -> Vec<(&'static str, String)> {
+    let guide = guide();
+    let (protocol, shapes) = match guide.find("\n### JSON shapes") {
+        Some(at) => (&guide[..at], Some(&guide[at + 1..])),
+        None => (guide.as_str(), None),
+    };
+    // Section A's headings, one level up: it's the whole document now.
+    let protocol = promote(protocol.replacen("## A. ", "# ", 1).as_str());
+    let mut skill = format!(
+        "---\nname: {SKILL_NAME}\ndescription: \"{SKILL_DESCRIPTION}\"\nmetadata:\n  hippo-task-version: \"{}\"\n---\n\n{}\n",
+        env!("CARGO_PKG_VERSION"),
+        protocol.trim_end()
+    );
+    let mut files = Vec::new();
+    if let Some(shapes) = shapes {
+        skill.push_str(
+            "\n## JSON shapes\n\nEvery `--json` output — the task object, `show`'s history, and each command's shape — is in [references/json.md](references/json.md). Read it when you need more than `num`, `state`, and `lease`.\n",
+        );
+        let shapes = promote(
+            shapes
+                .replacen("### JSON shapes", "# hippo-task JSON shapes", 1)
+                .as_str(),
+        );
+        files.push(("references/json.md", format!("{}\n", shapes.trim_end())));
+    }
+    files.insert(0, ("SKILL.md", skill));
+    files
+}
+
+/// `### Heading` → `## Heading`, outside code blocks.
+fn promote(text: &str) -> String {
+    let mut fenced = false;
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        }
+        match line.strip_prefix("### ") {
+            Some(rest) if !fenced => {
+                out.push_str("## ");
+                out.push_str(rest);
+            }
+            _ => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Write the skill into `<skills>/hippo-task/`, creating the folders and
+/// replacing its own files — re-running it is how a skill gets updated. Any
+/// other file in that folder is left alone. Returns the folder and the files.
+pub fn write_skill(skills: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
+    let folder = skills.join(SKILL_NAME);
+    let mut written = Vec::new();
+    for (name, text) in skill_files() {
+        // One component at a time: on Windows, joining `references/json.md`
+        // whole would leave a `/` in the path.
+        let path = name
+            .split('/')
+            .fold(folder.clone(), |path, part| path.join(part));
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| Error::io(format!("couldn't create {}", parent.display()), e))?;
+        }
+        fs::write(&path, text)
+            .map_err(|e| Error::io(format!("couldn't write {}", path.display()), e))?;
+        written.push(path);
+    }
+    Ok((folder, written))
 }
 
 // ------------------------------------------------------------------ helpers

@@ -1,15 +1,17 @@
 # AGENTS.md — HippoTask (`hippo-task`)
 
-Two audiences: **A** is for agents *using* `hippo-task` to coordinate work — `hippo-task guide` prints it, so a project's own AGENTS.md only needs to point there. **B** is for agents *changing* this crate.
+Two audiences: **A** is for agents *using* `hippo-task` to coordinate work — `hippo-task skill` installs it as an Agent Skill and `hippo-task guide` prints it, so a project's own AGENTS.md only needs to point there. **B** is for agents *changing* this crate.
 
 ## A. Coordinating work with `hippo-task`
 
-Your identity comes from the environment. A person usually launches each agent window with its own (`HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude`). If yours aren't set, set them once per session — and give every window or session its own node:
+Your identity comes from the environment. With hippo-task's Claude Code hooks installed, each session already has one (`agent:claude` on node `claude-…`); otherwise a person usually launches each agent window with its own (`HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude`). Check with `echo "$HIPPO_ACTOR@$HIPPO_NODE"`. If yours aren't set, set them once per session — and give every window or session its own node:
 
 ```bash
 export HIPPO_ACTOR=agent:claude       # who you are
 export HIPPO_NODE=claude-win-1        # unique per window/session; required for agent:… actors (exit 2 without it)
 ```
+
+If your shell doesn't keep variables from one command to the next, put them in front of each command instead: `HIPPO_ACTOR=agent:claude HIPPO_NODE=claude-win-1 hippo-task start 3 --json`.
 
 The loop:
 
@@ -17,7 +19,7 @@ The loop:
 2. **Claim.** `hippo-task start 3 --json` — exit 0: it's yours (claimed + state doing) until you finish or release it. There's no timer and nothing to renew. Exit 4: someone else has it — pick another; don't retry the same task.
 3. **Work, and leave breadcrumbs.** `hippo-task note 3 "what I did / where I stopped"` — the next agent reads these in `hippo-task show 3 --json`. Each note is also a sign of life: `list --held` shows how long a holder has been quiet.
 4. **Finish** with `hippo-task done 3`. Stopping without finishing? Add a note saying why, then `hippo-task release 3` — it goes back to `todo` for the next agent.
-5. **On exit,** `hippo-task release --all --json` gives back anything you still hold. Run it from your session's exit hook or your workflow's cleanup: a claim you don't give back stays yours until a person reclaims it.
+5. **On exit,** `hippo-task release --all --json` gives back anything you still hold. Run it from your session's exit hook or your workflow's cleanup — in Claude Code, `hippo-task hook session-end` does it for you: a claim you don't give back stays yours until a person reclaims it.
 
 Rules:
 
@@ -26,8 +28,9 @@ Rules:
 - Don't change the state of (or close) a task someone else holds — the CLI refuses with exit 4. `--force` and `hippo-task reclaim` are for humans, and for the orchestrator that launched a worker (to take back a failed worker's tasks: `reclaim --from <node> --force`) — not for you.
 - Tasks live where a person chose with `hippo-task init`, and every command finds them from any folder in the project. If a command says there's no task store, stop and tell the person — don't run `init` yourself.
 - Never edit a ledger (`ledger.jsonl`) by hand: it's append-only and the CLI is its only writer.
-- Before you `add` a task, search for the most distinctive term in it — a function, a file, an error message: `hippo-task list --json --search token_refresh`. If a task already covers it, add a note there instead. If you find you're working on a duplicate, mark it: `hippo-task update 8 --duplicate-of 5 --json` links it to the original and cancels it.
+- Before you `add` a task, look for it: `hippo-task similar "<the title and description you're about to file>" --json` lists the tasks sharing the most distinctive words with it, best first, in any state. Read them — a duplicate is usually a restatement, not a copy. If one already covers it, add a note there instead. For an exact term (a function, a file, an error message), `hippo-task list --json --search token_refresh`. If you find you're working on a duplicate, mark it: `hippo-task update 8 --duplicate-of 5 --json` links it to the original and cancels it. `add` also warns when an open task has the same title.
 - Some projects declare **fields** — attributes with one value per task, like `project` or `team`. Run `hippo-task fields --json` to see them and their allowed values; set them with `--field name=value` on `add` or `update`, and find tasks with `hippo-task list --json --field name=value`. A field that isn't declared, or a value off its list, exits 2 with the closest match: pick from the list — never invent a value. Labels stay free-form.
+- Some projects declare a **task format**: how this team writes tasks. Before you file tasks, run `hippo-task format --json` once per session, and write titles and descriptions the way its `guide` says, starting the description from its `template`, with its `required_fields` set. A task that misses part of it is still written, with one `{"warning": …}` per gap naming the fix — fix them with `desc` or `update --field`.
 - Descriptions are markdown and may contain image links to files in the store: `![caption](media/<sha256>.<ext>)`. `hippo-task desc 3 --file note.md` (or `hippo-task desc 3 --file -` for stdin) copies local images and video in and rewrites those links — write them inline, `![caption](path)`; `add --body` and `update --body` take the same markdown. `hippo-task desc 3 --base <seq>` passes the `seq` from your last read: if the description hasn't changed, your text is written; if it has, the two edits merge by paragraph. Paragraphs both sides rewrote differently exit 5 (`stale`) and write nothing — re-read the task and redo the edit. Without `--base`, the text replaces the description. Anyone may edit it, whether or not they hold the task.
 - Never put secrets or personal data in titles, notes, or descriptions — they are stored in cleartext, forever.
 
@@ -46,7 +49,7 @@ Closed tasks (`done` or `cancelled`): only `start` refuses them. `hippo-task upd
 
 ### JSON shapes
 
-With `--json`, stdout is exactly one JSON document. `guide --json` prints `{"guide": "…"}` — this section, as text. `init --json`, for scripts, prints `{"project", "store": {"kind", "path"}, "pointer", "created", "git": {"repository", "kept_out"}}`. `fields --json` prints `{"config", "fields": [{"field", "display_name", "values", "counts": [{"value", "open", "total"}]}], "strays": [{"num", "id", "field", "value"}]}` — `values` is `null` when any text is allowed; `strays` are values tasks carry that the config doesn't allow. `export notion --out FILE --json` prints `{"file", "exported", "changed", "media_files"}`: the file written (`null` when nothing was new), the task objects in it, the ones left out because they changed since an earlier export, and `media_files` — the files this command copied into `media/` beside the CSV. A file already there with the same bytes is left alone and omitted. Every single-task command (`add`, `update`, `start`, `release`, `note`, `desc`, `done`, `show`) prints a **task object**; `list`, `release --all`, and `reclaim` print an array of them (for the last two, the tasks they handed back — possibly none).
+With `--json`, stdout is exactly one JSON document. `guide --json` prints `{"guide": "…"}` — this section, as text. `init --json`, for scripts, prints `{"project", "store": {"kind", "path"}, "pointer", "created", "git": {"repository", "kept_out"}}`. `skill --to <folder> --json` prints `{"skill", "files"}`: the skill's folder and the files written, as absolute paths. `hook session-start` and `hook session-end` print nothing, even with `--json`: a SessionStart hook's output would land in the agent's context. `format --json` prints `{"config", "guide", "template", "required_fields", "required_sections"}` — `null` or `[]` for what the project doesn't declare. `fields --json` prints `{"config", "fields": [{"field", "display_name", "values", "counts": [{"value", "open", "total"}]}], "strays": [{"num", "id", "field", "value"}]}` — `values` is `null` when any text is allowed; `strays` are values tasks carry that the config doesn't allow. `export notion --out FILE --json` prints `{"file", "exported", "changed", "media_files"}`: the file written (`null` when nothing was new), the task objects in it, the ones left out because they changed since an earlier export, and `media_files` — the files this command copied into `media/` beside the CSV. A file already there with the same bytes is left alone and omitted. Every single-task command (`add`, `update`, `start`, `release`, `note`, `desc`, `done`, `show`) prints a **task object**; `list`, `similar` (best match first), `release --all`, and `reclaim` print an array of them (for the last two, the tasks they handed back — possibly none).
 
 Task object:
 
@@ -71,6 +74,27 @@ Task object:
 
 On stderr, `--json` mode writes JSON lines: zero or more `{"warning": "…"}`, then — on failure — one error object with the fields `error` (the kind), `message`, and `exit_code`, e.g. `{"error":"conflict","message":"#3 is held by agent:codex@cx (quiet 7m) — back off and pick another task","exit_code":4}`.
 
+Stability: within 0.7.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
+
+## B. Changing this crate
+
+- **Decide before you build.** A new feature or a domain-model change starts with a short decision record in `docs/decisions/` (like ADR-001), before any code.
+- **Done means `make verify` passes** — fmt, clippy with warnings as errors, every test, and the test-integrity gate. CI runs the same thing on Linux and macOS, plus `cargo test --locked` on the minimum supported Rust (1.89), and clippy and the tests on Windows — code behind `#[cfg(windows)]` is only ever compiled there. Check the machine first with `make doctor`.
+- **Test first.** Write the failing test, then the code. Tests are the guardrail: strengthen them freely, but never weaken or delete one to get a change through — the integrity gate (`make integrity`, run by `make verify` and CI) fails on removed assertions and newly ignored or skipped tests, in the Rust tests and in `ui/*.test.cjs`. It only runs when it can resolve a base commit to diff against (no git history, or an unknown base: it says so and passes). A genuine exception needs `test-weaken-ok: <reason>` in the diff — one such line waives the check for the whole diff, so it needs a human review.
+- **No panics in product code.** `unwrap`, `expect`, `panic!`, and `println!` are denied clippy lints (Cargo.toml `[lints.clippy]`): `cargo build` still compiles, but `make verify`'s `clippy -D warnings` fails. Return an `Error` from `src/error.rs`, with context. Never swallow an error: at minimum report it (see how the ledger reader skips *and reports* bad lines).
+- **Physics vs etiquette.** Merge rules live in `src/fold.rs` and must hold for any ledger in any order — a hand-rolled property test there checks it (300 random ledgers, each folded in 3 shuffled orders, plus invariants; no proptest crate). CLI policy ("only the holder may close a task") lives in `src/ops.rs`.
+- **The on-disk event shape is frozen** (test in `src/model.rs`). New event kinds may be added; existing ones never change shape.
+- **Privacy by default.** Collect nothing about the user or machine unless they opt in (guarded by `tests/cli.rs`). Flag any change that would record personal data before making it.
+- **Docs are tested** (`tests/docs.rs`): a new command must appear in README.md, a new JSON field here, a version bump in CHANGELOG.md.
+- **Releasing** (binaries for macOS, Linux, and Windows): bump `version` in Cargo.toml (then `cargo update --workspace`), add its CHANGELOG section, and land both on `main` with CI green. Then push that one tag — `git tag v0.4.1 && git push origin v0.4.1`, never `git push --tags`. `.github/workflows/release.yml` checks the tag against Cargo.toml and the CHANGELOG, builds every target with `scripts/package.sh`, publishes the release, and installs it on each OS. Running the workflow by hand is a dry run.
+- **Don't over-engineer.** Full HLC, hash-chaining, compaction, sync, storage adapters, and hosted collaboration stay deferred until real use earns them. The optional local review UI is bounded by ADR-009.
+- UI behavior tests use Node 18+ without npm dependencies (`make test-ui`), and run in `make verify`. Node is not required by the shipped UI.
+- Verbs: `make setup | build | typecheck | lint | fmt | test | test-ui | test-affected | integrity | verify | doctor | install | demo | play | ui`.
+
+### The review UI's local API
+
+For changing the UI, not for coordinating work — agents coordinate through the CLI.
+
 `ui --no-open --json` starts the optional local browser UI and prints one launch
 object: `{"url", "store", "actor"}`. `url` includes a per-launch session token
 in its fragment; `store` is the resolved store folder; `actor` is `human:local`.
@@ -79,7 +103,7 @@ for UI writes and never initializes a missing store. Agents should continue
 using the CLI JSON operations for coordination.
 
 The UI's local HTTP API is an internal interface. Its state includes `tasks`,
-`fields`, `store`, `actor`, `changed` (IDs whose exported rows changed), and
+`fields`, `format` (as `format --json` prints it), `store`, `actor`, `changed` (IDs whose exported rows changed), and
 `warnings`. Task/detail responses use the existing task JSON. Export preview
 adds `review` (an opaque fingerprint), `csv`, `exported`, `changed`, and
 `suggested_path`; saving returns the existing export report. Preview appends
@@ -96,20 +120,3 @@ The path is `media/<sha256>.<ext>`; original filenames are not transmitted.
 Uploads add files to the local store without writing task events. Saving the
 description attaches their links; discarding a draft does not delete uploaded
 files, which could already be shared by other tasks.
-
-Stability: within 0.7.x, fields are only ever added — never renamed or removed. Anything breaking bumps the version and is called out in CHANGELOG.md.
-
-## B. Changing this crate
-
-- **Decide before you build.** A new feature or a domain-model change starts with a short decision record in `docs/decisions/` (like ADR-001), before any code.
-- **Done means `make verify` passes** — fmt, clippy with warnings as errors, every test, and the test-integrity gate. CI runs the same thing on Linux and macOS, plus `cargo test --locked` on the minimum supported Rust (1.89), and clippy and the tests on Windows — code behind `#[cfg(windows)]` is only ever compiled there. Check the machine first with `make doctor`.
-- **Test first.** Write the failing test, then the code. Tests are the guardrail: strengthen them freely, but never weaken or delete one to get a change through — the integrity gate (`make integrity`, run by `make verify` and CI) fails on removed assertions and newly ignored tests. It only runs when it can resolve a base commit to diff against (no git history, or an unknown base: it says so and passes). A genuine exception needs `test-weaken-ok: <reason>` in the diff — one such line waives the check for the whole diff, so it needs a human review.
-- **No panics in product code.** `unwrap`, `expect`, `panic!`, and `println!` are denied clippy lints (Cargo.toml `[lints.clippy]`): `cargo build` still compiles, but `make verify`'s `clippy -D warnings` fails. Return an `Error` from `src/error.rs`, with context. Never swallow an error: at minimum report it (see how the ledger reader skips *and reports* bad lines).
-- **Physics vs etiquette.** Merge rules live in `src/fold.rs` and must hold for any ledger in any order — a hand-rolled property test there checks it (300 random ledgers, each folded in 3 shuffled orders, plus invariants; no proptest crate). CLI policy ("only the holder may close a task") lives in `src/ops.rs`.
-- **The on-disk event shape is frozen** (test in `src/model.rs`). New event kinds may be added; existing ones never change shape.
-- **Privacy by default.** Collect nothing about the user or machine unless they opt in (guarded by `tests/cli.rs`). Flag any change that would record personal data before making it.
-- **Docs are tested** (`tests/docs.rs`): a new command must appear in README.md, a new JSON field here, a version bump in CHANGELOG.md.
-- **Releasing** (binaries for macOS, Linux, and Windows): bump `version` in Cargo.toml (then `cargo update --workspace`), add its CHANGELOG section, and land both on `main` with CI green. Then push that one tag — `git tag v0.4.1 && git push origin v0.4.1`, never `git push --tags`. `.github/workflows/release.yml` checks the tag against Cargo.toml and the CHANGELOG, builds every target with `scripts/package.sh`, publishes the release, and installs it on each OS. Running the workflow by hand is a dry run.
-- **Don't over-engineer.** Full HLC, hash-chaining, compaction, sync, storage adapters, and hosted collaboration stay deferred until real use earns them. The optional local review UI is bounded by ADR-009.
-- UI behavior tests use Node 18+ without npm dependencies (`make test-ui`), and run in `make verify`. Node is not required by the shipped UI.
-- Verbs: `make setup | build | typecheck | lint | fmt | test | test-ui | test-affected | integrity | verify | doctor | install | demo | play | ui`.

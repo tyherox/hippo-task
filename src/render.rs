@@ -9,7 +9,7 @@
 //! - Derived, read-time facts are included so agents don't recompute them:
 //!   `blocked`, and `lease.active` (evaluated at the moment of the command).
 
-use crate::config::{Field, EXAMPLE, EXPORT_COLUMNS_AFTER, EXPORT_COLUMNS_BEFORE};
+use crate::config::{Config, Field, EXAMPLE, EXPORT_COLUMNS_AFTER, EXPORT_COLUMNS_BEFORE};
 use crate::error::Error;
 use crate::media::{self, MediaFile};
 use crate::model::{Event, EventKind, Lease, Priority, RelType, Relation, State, Task};
@@ -183,6 +183,30 @@ pub struct FieldsView<'a> {
     pub config: String,
     pub fields: Vec<FieldView<'a>>,
     pub strays: &'a [Stray],
+}
+
+/// `format --json` (ADR-012): the project's task conventions. `null` or `[]`
+/// for whatever it doesn't declare.
+#[derive(Debug, Serialize)]
+pub struct FormatView<'a> {
+    /// The config file's path (whether or not it exists yet).
+    pub config: String,
+    pub guide: Option<&'a str>,
+    pub template: Option<&'a str>,
+    pub required_fields: &'a [String],
+    pub required_sections: &'a [String],
+}
+
+impl<'a> FormatView<'a> {
+    pub fn new(c: &'a Config) -> Self {
+        FormatView {
+            config: c.path.display().to_string(),
+            guide: c.format.guide.as_deref(),
+            template: c.format.template.as_deref(),
+            required_fields: &c.format.required_fields,
+            required_sections: &c.format.required_sections,
+        }
+    }
 }
 
 /// One declared field. `values` is `null` when any text is allowed.
@@ -507,6 +531,44 @@ fn history_line(entry: &Entry, all: &BTreeMap<String, Task>) -> String {
 
 /// `hippo-task fields`: each declared field and its values, how much each is
 /// used, and the strays — or, with no config yet, an example to start from.
+/// `hippo-task format`: the conventions, or how to declare some.
+pub fn format_text(c: &Config) -> String {
+    let path = c.path.display();
+    let f = &c.format;
+    if *f == crate::config::Format::default() {
+        return format!(
+            "No task format declared yet. Declare one in {path} — for example:\n\n{}",
+            crate::format::EXAMPLE
+        );
+    }
+    let mut out = format!("Task format declared in {path}:\n");
+    let indent = |text: &str| -> String {
+        text.trim_end()
+            .lines()
+            .map(|l| format!("  {l}").trim_end().to_string() + "\n")
+            .collect()
+    };
+    if let Some(guide) = &f.guide {
+        out.push_str(&format!("\nGuide:\n{}", indent(guide)));
+    }
+    if let Some(template) = &f.template {
+        out.push_str(&format!("\nDescription template:\n{}", indent(template)));
+    }
+    if !f.required_fields.is_empty() {
+        out.push_str(&format!(
+            "\nRequired fields: {}\n",
+            f.required_fields.join(", ")
+        ));
+    }
+    if !f.required_sections.is_empty() {
+        out.push_str(&format!(
+            "Required sections (with text under them): {}\n",
+            f.required_sections.join(", ")
+        ));
+    }
+    out
+}
+
 pub fn fields_text(r: &FieldsReport) -> String {
     let path = r.config.path.display();
     if r.config.fields.is_empty() {

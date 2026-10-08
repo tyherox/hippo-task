@@ -16,10 +16,15 @@ try {
 history.replaceState(null, "", "/");
 const drafts = new Map();
 const selected = new Set();
-let tasks = [], fields = [], changed = new Set(), active = null, inline = null, view = "board";
-let fieldFilters = {}, connected = false, refreshing = false, dragging = false, needsRender = true, toastTimer;
+let tasks = [], fields = [], changed = new Set(), active = null, inline = null, view = "list";
+let workspaceScope = "all", lastSelected = null;
+let bulkBusy = false, bulkTargets = new Set(), bulkResult = null, bulkUndo = [];
+let fieldFilters = {}, connected = false, refreshing = false, refreshAgain = false, writes = 0, dragging = false, needsRender = true, toastTimer;
 let exportIds = [], previewData = null, previewVersion = 0, exporting = false;
 let descriptionRequest = null, descriptionMediaUrls = [], descriptionTimer;
+// The project's task conventions (ADR-012): a template for new descriptions,
+// and fields every task should carry.
+let taskFormat = {guide:null, template:null, required_fields:[], required_sections:[]};
 let mediaPicker = null, mediaLimits = {max_image_bytes:8 * 1024 * 1024,max_video_bytes:64 * 1024 * 1024};
 
 async function api(path, method = "GET", body, signal) {
@@ -40,6 +45,12 @@ async function api(path, method = "GET", body, signal) {
     throw error;
   }
   return result;
+}
+// Every change goes through here, so a task list read while it was in flight
+// can be recognized as possibly older than the change and read again.
+async function write(path, method, body) {
+  try { return await api(path, method, body); }
+  finally { writes++; }
 }
 
 function showWarnings(warnings) {
@@ -102,14 +113,21 @@ function dirty(id) { const draft = drafts.get(id); return Boolean(draft && (draf
 function dirtyIds() { return [...drafts.keys()].filter(dirty); }
 
 async function refresh() {
-  if (refreshing) return;
+  if (refreshing) { refreshAgain = true; return; }
   refreshing = true;
   try {
-    const state = await api("/api/state");
+    let state;
+    do {
+      refreshAgain = false;
+      const before = writes;
+      state = await api("/api/state");
+      if (writes !== before) refreshAgain = true;
+    } while (refreshAgain);
     const previous = JSON.stringify([tasks, fields, [...changed]]);
     tasks = state.tasks;
     fields = state.fields.fields;
     mediaLimits = state.media_limits || mediaLimits;
+    taskFormat = state.format || taskFormat;
     changed = new Set(state.changed);
     needsRender ||= previous !== JSON.stringify([tasks, fields, [...changed]]);
     const folderParts = state.store.split(/[\\/]/).filter(Boolean);
@@ -126,17 +144,19 @@ async function refresh() {
     connected = true;
     $("#connection").textContent = "On this computer";
     $("#connection").className = "connection online";
+    $("#connection").title = "On this computer · changes save to the local task store";
     $("#connection-error").hidden = true;
     renderFilters();
     // Stable data must not steal keyboard focus every five seconds. A native
     // status menu, inline edit, or drag also owns its DOM until it finishes.
     const choosingState = document.activeElement?.matches("#tasks select");
-    if (needsRender && !inline && !dragging && !choosingState) { renderTasks(); needsRender = false; }
+    if (needsRender && !inline && !dragging && !choosingState && !bulkBusy) { renderTasks(); needsRender = false; }
     renderSelection();
   } catch (error) {
     connected = false;
     $("#connection").textContent = "Disconnected";
     $("#connection").className = "connection offline";
+    $("#connection").title = error.message;
     $("#connection-error").textContent = error.message;
     $("#connection-error").hidden = false;
     renderSelection();
@@ -159,25 +179,196 @@ function renderFilters() {
       const values = field.values || [...new Set(tasks.map((t) => t.fields[field.field]).filter(Boolean))].sort();
       return `<select data-filter-field="${escapeHtml(field.field)}" aria-label="Filter by ${escapeHtml(field.display_name)}">${options(Object.fromEntries(values.map((v) => [v,v])), fieldFilters[field.field], `All ${field.display_name.toLowerCase()}`)}</select>`;
     }).join("");
+    // Removing a value is its own menu choice, so a blank or untouched value
+    // control can never clear anything.
+    const bulkField = $("#bulk-field"), chosen = bulkField.value || "state";
+    const set = {state:"Status",priority:"Priority",assignee:"Owner","add-tags":"Add tags","remove-tags":"Remove tags",...Object.fromEntries(fields.map(f => [`field:${f.field}`,f.display_name]))};
+    const remove = {unassign:"Unassign owner",...Object.fromEntries(fields.map(f => [`clear:${f.field}`,`Clear ${f.display_name}`]))};
+    bulkField.innerHTML = `<optgroup label="Set">${options(set,chosen)}</optgroup><optgroup label="Remove">${options(remove,chosen)}</optgroup>`;
+    if (bulkField.value !== chosen) renderBulkValue();
   }
 }
 
 function visibleTasks() {
   const search = $("#search").value.trim().toLowerCase(), status = $("#status-filter").value;
   return tasks.filter((task) => {
+    if (workspaceScope === "active" && !["todo","doing"].includes(task.state)) return false;
+    if (workspaceScope === "done" && task.state !== "done") return false;
+    if (workspaceScope === "blocked" && !task.blocked) return false;
+    if (workspaceScope === "drafts" && !dirty(task.id)) return false;
     if (task.state === "cancelled" && !$("#show-cancelled").checked && status !== "cancelled") return false;
     if (status && (status === "blocked" ? !task.blocked : task.state !== status)) return false;
     if ($("#priority-filter").value && task.priority !== $("#priority-filter").value) return false;
     if ($("#label-filter").value && !task.labels.includes($("#label-filter").value)) return false;
     if ($("#export-filter").value && exportState(task) !== $("#export-filter").value) return false;
     if (Object.entries(fieldFilters).some(([key, value]) => value && task.fields[key] !== value)) return false;
-    return !search || [task.title, task.body || "", task.num, ...task.labels, ...Object.values(task.fields)].join(" ").toLowerCase().includes(search);
+    return !search || [task.title, task.body || "", task.num, task.assignee || "", ...task.labels, ...Object.values(task.fields)].join(" ").toLowerCase().includes(search);
+  }).sort((a,b) => {
+    const order = $("#sort-order").value;
+    if (order === "priority") { const rank={urgent:0,high:1,med:2,low:3,none:4}; return rank[a.priority]-rank[b.priority] || a.num-b.num; }
+    if (order === "newest") return b.num-a.num;
+    if (order === "title") return a.title.localeCompare(b.title) || a.num-b.num;
+    return a.num-b.num;
   });
 }
 
 function reviewTasks() {
   const visible = visibleTasks();
-  return view === "board" ? Object.keys(statuses).flatMap(state => visible.filter(task => task.state === state)) : visible;
+  return view === "board" || $("#group-by").value === "state" ? Object.keys(statuses).flatMap(state => visible.filter(task => task.state === state)) : visible;
+}
+
+function selectTask(id, checked, range = false) {
+  if (bulkBusy) return;
+  const order = reviewTasks().map(t => t.id), start = order.indexOf(lastSelected), end = order.indexOf(id);
+  const ids = range && start >= 0 && end >= 0 ? order.slice(Math.min(start,end),Math.max(start,end)+1) : [id];
+  for (const taskId of ids) { if (checked) selected.add(taskId); else selected.delete(taskId); }
+  lastSelected = id;
+  renderSelection();
+}
+
+function bulkPatch(task, change) {
+  const patch = {}, value = String(change.value ?? "").trim();
+  if (change.field === "state" || change.field === "priority") {
+    const allowed = change.field === "state" ? statuses : priorities;
+    if (!Object.hasOwn(allowed,value)) throw new Error(`Choose a ${change.field === "state" ? "status" : "priority"} first.`);
+    if (task[change.field] !== value) patch[change.field] = value;
+  } else if (change.field === "assignee") {
+    if (!value) throw new Error("Enter an owner, or choose Unassign owner.");
+    if ((task.assignee || "") !== value) patch.assignee=value;
+  } else if (change.field === "unassign") {
+    if (task.assignee) patch.unassign=true;
+  } else if (["add-tags","remove-tags"].includes(change.field)) {
+    const values = tags(value);
+    if (!values.length) throw new Error("Enter at least one tag.");
+    const removing = change.field === "remove-tags";
+    const labels = values.filter(label => removing ? task.labels.includes(label) : !task.labels.includes(label));
+    if (labels.length) patch[removing ? "label_remove" : "label_add"] = labels;
+  } else if (change.field.startsWith("field:")) {
+    const name = change.field.slice(6), field = fields.find(f => f.field === name);
+    if (!field) throw new Error("Choose a property to change.");
+    if (!value) throw new Error(`Choose a value for ${field.display_name}, or choose Clear ${field.display_name}.`);
+    if (field.values && !field.values.includes(value)) throw new Error("Choose a valid value for this field.");
+    if ((task.fields[name] || "") !== value) patch.fields={[name]:value};
+  } else if (change.field.startsWith("clear:")) {
+    const name = change.field.slice(6);
+    if (!fields.some(f => f.field === name)) throw new Error("Choose a property to change.");
+    if (task.fields[name]) patch.clear_fields=[name];
+  } else throw new Error("Choose a property to change.");
+  return patch;
+}
+
+function bulkChoice() { return {field:$("#bulk-field").value, value:$("#bulk-value")?.value ?? ""}; }
+function bulkReady(change) {
+  if (change.field === "unassign" || change.field.startsWith("clear:")) return true;
+  if (["add-tags","remove-tags"].includes(change.field)) return tags(String(change.value ?? "")).length > 0;
+  return Boolean(String(change.value ?? "").trim());
+}
+function bulkNote() {
+  if ($("#bulk-field").value !== "state") return "";
+  const count = [...selected].map(taskById).filter(task => task && held(task)).length;
+  return count ? `${count} held by ${count === 1 ? "another worker keeps its" : "other workers keep their"} status` : "";
+}
+
+function reversePatch(task, patch) {
+  const inverse = {};
+  for (const key of ["state","priority"]) if (Object.hasOwn(patch,key)) inverse[key]=task[key];
+  if (patch.assignee || patch.unassign) { if (task.assignee) inverse.assignee=task.assignee; else inverse.unassign=true; }
+  if (patch.label_add) inverse.label_remove=patch.label_add;
+  if (patch.label_remove) inverse.label_add=patch.label_remove;
+  for (const name of [...Object.keys(patch.fields || {}),...(patch.clear_fields || [])]) {
+    if (task.fields[name]) (inverse.fields ||= {})[name]=task.fields[name];
+    else (inverse.clear_fields ||= []).push(name);
+  }
+  return inverse;
+}
+
+async function runBulkChange(change) {
+  if (bulkBusy || !selected.size) return;
+  let plan;
+  try {
+    plan = [...selected].map(id => {
+      const task = taskById(id);
+      if (!task) return {id,num:"?",missing:true,patch:{}};
+      const patch = bulkPatch(task,change);
+      return {id,num:task.num,base:task.seq,patch,inverse:reversePatch(task,patch)};
+    });
+  } catch (error) { toast(error.message,true); return; }
+  return executeBulk(plan,false);
+}
+
+async function undoBulkChange() {
+  if (bulkBusy || !bulkUndo.length) return;
+  const plan = bulkUndo.map(item => ({...item}));
+  return executeBulk(plan,true);
+}
+
+// An undo can't be retried (it is used up either way), so its failures
+// explain what was left alone rather than suggesting another attempt.
+const bulkFailures = {
+  disconnected:["Not attempted because the connection was lost.","Not attempted because the connection was lost."],
+  missing:["This task is no longer available.","This task is no longer available."],
+  draft:["Save or discard this task’s unsaved changes first.","It has unsaved changes, so undo left it as it is."],
+  held:["Someone else is working on this task and controls its status.","Someone else is working on this task, so undo left its status as it is."],
+  connection:["Save not confirmed. Check this task before retrying; it may have been updated.","Undo not confirmed. Check this task; it may have been changed back."],
+  stale:["Changed since you reviewed it. Open the task, review it, then try again.","Changed after the batch, so undo left it as it is. Open the task to review it."],
+};
+
+async function executeBulk(plan, undo) {
+  bulkBusy=true; bulkTargets=new Set(plan.map(item=>item.id));
+  bulkResult=null;
+  const result={updated:[],unchanged:[],failed:[],undo}, nextUndo=[];
+  const failure=(kind) => bulkFailures[kind][undo ? 1 : 0];
+  let disconnected=false;
+  renderSelection(); renderBulkResult(); renderEditor();
+  try {
+    for (const item of plan) {
+      $("#bulk-progress").textContent=`${undo ? "Undoing" : "Updating"} ${result.updated.length+result.unchanged.length+result.failed.length+1} of ${plan.length}…`;
+      let reason="";
+      if (disconnected) reason=failure("disconnected");
+      else if (item.missing || !taskById(item.id)) reason=failure("missing");
+      else if (dirty(item.id) || drafts.get(item.id)?.saving) reason=failure("draft");
+      else if (item.patch.state && held(taskById(item.id))) reason=failure("held");
+      if (reason) { result.failed.push({...item,message:reason}); continue; }
+      if (!Object.keys(item.patch).length) { result.unchanged.push(item); continue; }
+      try {
+        const saved=await write(`/api/task/${item.id}`,"PATCH",{base:item.base,...item.patch});
+        tasks[tasks.findIndex(t=>t.id===item.id)]=saved;
+        if (drafts.has(item.id)) drafts.set(item.id,newDraft(saved));
+        result.updated.push(item);
+        if (!undo) nextUndo.push({id:item.id,num:item.num,base:saved.seq,patch:item.inverse});
+      } catch (error) {
+        disconnected=error.kind === "connection";
+        result.failed.push({...item,message:disconnected ? failure("connection") : error.kind === "stale" ? failure("stale") : error.message});
+      }
+    }
+  } finally {
+    // Undo is for the most recent batch that changed something; running it
+    // uses it up. Conditional bases keep an older undo from overwriting newer work.
+    if (undo) bulkUndo=[];
+    else if (nextUndo.length) bulkUndo=nextUndo;
+    bulkBusy=false; bulkTargets.clear(); bulkResult=result;
+    $("#bulk-progress").textContent="";
+    await refresh(); renderTasks(); renderEditor(); renderBulkResult(); renderSelection();
+  }
+  return result;
+}
+
+function renderBulkResult() {
+  const panel=$("#bulk-result"); panel.hidden=!bulkResult;
+  if (!bulkResult) return;
+  const {updated,unchanged,failed,undo}=bulkResult;
+  panel.innerHTML=`<div class="bulk-result-heading"><span>${updated.length} ${undo ? "undone" : "updated"}${unchanged.length ? ` · ${unchanged.length} already matched` : ""}${failed.length ? ` · ${failed.length} need attention` : ""}</span><div>${bulkUndo.length ? `<button data-action="undo-bulk" class="quiet-button">${updated.length ? "Undo last batch" : "Undo previous batch"}</button>` : ""}<button data-action="dismiss-bulk" class="quiet-button" aria-label="Dismiss bulk edit result">×</button></div></div>${failed.length ? `<details open><summary>Review tasks that weren’t confirmed</summary><ul>${failed.map(item=>`<li><button data-open="${escapeHtml(item.id)}">Task ${item.num}</button><span>${escapeHtml(item.message)}</span></li>`).join("")}</ul></details>` : ""}`;
+}
+
+function renderBulkValue() {
+  const field=$("#bulk-field").value, definition=fields.find(f=>`field:${f.field}`===field);
+  const removing=fields.find(f=>`clear:${f.field}`===field);
+  const name=definition?.display_name || {state:"Status",priority:"Priority",assignee:"Owner"}[field];
+  const choices=field === "state" ? statuses : field === "priority" ? priorities : definition?.values ? Object.fromEntries(definition.values.map(value=>[value,value])) : null;
+  if (field === "unassign" || removing) $("#bulk-value-control").innerHTML=`<span class="bulk-explain">${field === "unassign" ? "Removes the owner from the selected tasks" : `Removes ${escapeHtml(removing.display_name)} from the selected tasks`}</span>`;
+  else if (choices) $("#bulk-value-control").innerHTML=`<select id="bulk-value" aria-label="New ${escapeHtml(name.toLowerCase())}">${options(choices,"",`Choose ${name.toLowerCase()}…`)}</select>`;
+  else $("#bulk-value-control").innerHTML=`<input id="bulk-value" aria-label="${name ? `New ${escapeHtml(name.toLowerCase())}` : "Tags to change"}" placeholder="${field === "assignee" ? "Owner" : name ? escapeHtml(name) : "Tags, separated by commas"}">`;
+  renderSelection();
 }
 function adjacentTask(direction) {
   const review = reviewTasks(), index = review.findIndex(task => task.id === active);
@@ -198,9 +389,9 @@ function renderTaskNavigation() {
   const navigation = $("#task-navigation");
   if (!active || !navigation) return;
   const review = reviewTasks(), index = review.findIndex(task => task.id === active);
-  navigation.innerHTML = `<div class="review-position">${active === "new" ? "New task" : index < 0 ? "Outside current filters" : `${index + 1} of ${review.length} tasks`}<span>Changes stay in this tab until you save.</span></div><div class="review-controls"><button data-navigate="-1" aria-label="Previous task" title="Previous task · Alt + Left" ${index <= 0 ? "disabled" : ""}>← Previous</button><label class="task-chooser"><span class="sr-only">Jump to task</span><select id="task-chooser"><option value="">Jump to task…</option>${review.map(task => `<option value="${escapeHtml(task.id)}" ${task.id === active ? "selected" : ""}>${task.num}. ${escapeHtml(task.title)}</option>`).join("")}</select></label><button data-navigate="1" aria-label="Next task" title="Next task · Alt + Right" ${index < 0 || index === review.length - 1 ? "disabled" : ""}>Next →</button></div>`;
+  navigation.innerHTML = `<span class="review-position">${active === "new" ? "New" : index < 0 ? "Outside this view" : `${index + 1} / ${review.length}`}</span><label class="task-chooser"><span class="sr-only">Jump to task</span><select id="task-chooser" title="Jump to another task"><option value="">Jump to…</option>${review.map(task => `<option value="${escapeHtml(task.id)}" ${task.id === active ? "selected" : ""}>#${task.num} · ${escapeHtml(task.title)}</option>`).join("")}</select></label><button data-navigate="-1" aria-label="Previous task" title="Previous task · Alt + Left" ${index <= 0 ? "disabled" : ""}>↑</button><button data-navigate="1" aria-label="Next task" title="Next task · Alt + Right" ${index < 0 || index === review.length - 1 ? "disabled" : ""}>↓</button>`;
   const nextButton = $("#save-next");
-  if (nextButton) nextButton.disabled = !adjacentTask(1) || Boolean(drafts.get(active)?.saving || drafts.get(active)?.upload);
+  if (nextButton) nextButton.disabled = !adjacentTask(1) || bulkTargets.has(active) || Boolean(drafts.get(active)?.saving || drafts.get(active)?.upload);
 }
 
 function badge(label, kind = "") { return `<span class="badge ${kind}">${escapeHtml(label)}</span>`; }
@@ -217,20 +408,18 @@ function stateSelect(task, draft) {
 }
 
 function renderTasks() {
-  const railScroll = $(".task-rail")?.scrollTop || 0;
+  const listScroll = $("#tasks").scrollTop;
+  const pendingNew = workspaceScope === "drafts" && drafts.has("new") ? `<div class="new-draft-row"><span class="draft-dot"></span><button data-open="new">${escapeHtml(drafts.get("new").values.title || "Untitled task")}</button><span>New · not saved yet</span></div>` : "";
   const focused = document.activeElement;
   const focusAttribute = ["data-open","data-inline","data-select","data-move"].find((attribute) => focused?.closest("#tasks") && focused.hasAttribute(attribute));
   const focusValue = focusAttribute ? focused.getAttribute(focusAttribute) : null;
   const visible = visibleTasks();
   $("#board-view").setAttribute("aria-pressed", String(view === "board"));
   $("#list-view").setAttribute("aria-pressed", String(view === "list"));
-  if (active) {
-    $("#tasks").innerHTML = `<nav class="task-rail" aria-label="Tasks in this review"><p class="rail-heading">YOUR TASKS <span>${visible.length}</span></p>${reviewTasks().map(task => `<button class="review-task ${task.id === active ? "active" : ""}" data-open="${task.id}" ${task.id === active ? 'aria-current="true"' : ""}><span class="review-task-meta">Task ${task.num}<span>${dirty(task.id) ? "Unsaved" : statuses[task.state]}</span></span><span class="review-task-title">${escapeHtml(task.title)}</span>${task.blocked ? '<span class="review-task-note">Waiting on other tasks</span>' : ""}</button>`).join("") || '<p class="help">No tasks match. Adjust the filters above to continue.</p>'}</nav>`;
-    $(".task-rail").scrollTop = railScroll;
-    renderTaskNavigation();
-  } else if (!visible.length) {
-    $("#tasks").innerHTML = `<div class="empty"><h2>${tasks.length ? "No tasks match these filters" : "Room for your next idea"}</h2><p>${tasks.length ? "Try another search or clear a filter." : "Create a task to get started. You can add details and screenshots as you go."}</p>${!tasks.length ? '<button data-action="new">+ Create a task</button>' : ''}</div>`;
-    renderSelection(); return;
+  $("#group-by").disabled = view === "board";
+  if (!visible.length) {
+    $("#tasks").innerHTML = pendingNew || `<div class="empty"><h2>${tasks.length ? "No tasks match these filters" : "Room for your next idea"}</h2><p>${tasks.length ? "Try another search or clear a filter." : "Create a task to get started. You can add details and screenshots as you go."}</p><button data-action="${tasks.length ? "reset-filters" : "new"}">${tasks.length ? "Show all tasks" : "+ Create a task"}</button></div>`;
+    renderTaskNavigation(); renderSelection(); return;
   } else if (view === "board") {
     const columns = Object.entries(statuses).filter(([state]) => state !== "cancelled" || $("#show-cancelled").checked || $("#status-filter").value === "cancelled");
     $("#tasks").innerHTML = `<div class="board ${columns.length === 4 ? "four" : ""}">${columns.map(([state, label]) => {
@@ -238,13 +427,30 @@ function renderTasks() {
       return `<section class="column" data-drop="${state}" aria-label="${label}"><div class="column-heading"><span class="state-mark ${state}"></span>${label}<span class="count">${cards.length}</span></div>${cards.map((task) => `<article class="card ${active === task.id ? "active" : ""}" data-task="${task.id}" draggable="${!held(task) && !dirty(task.id)}"><div class="card-top"><input type="checkbox" data-select="${task.id}" aria-label="Select task ${task.num}" ${selected.has(task.id) ? "checked" : ""}><span class="task-num">Task ${task.num}</span></div><button class="card-title" data-open="${task.id}">${escapeHtml(task.title)}</button>${task.body ? `<p class="card-description">${escapeHtml(task.body)}</p>` : ""}<div class="card-meta">${taskBadges(task)}</div><div class="card-bottom">${stateSelect(task)}<span class="export-label">${escapeHtml(exportLabel(task))}</span></div></article>`).join("") || '<p class="empty-column">No tasks here yet</p>'}</section>`;
     }).join("")}</div>`;
   } else {
-    $("#tasks").innerHTML = `<div class="table-wrap"><table><thead><tr><th aria-label="Selection"></th><th>Task</th><th>Status</th><th>Priority</th><th>Owner</th><th>Tags</th>${fields.map((field) => `<th>${escapeHtml(field.display_name)}</th>`).join("")}<th>Export</th><th>Actions</th></tr></thead><tbody>${visible.map(renderRow).join("")}</tbody></table></div>`;
+    $("#tasks").innerHTML = $("#group-by").value === "state" ? Object.entries(statuses).map(([state,label]) => {
+      const items = visible.filter(task => task.state === state);
+      return items.length ? `<section class="task-group" aria-label="${label}"><div class="group-heading"><span class="state-mark ${state}"></span><h2>${label}</h2><span>${items.length}</span></div>${items.map(renderRow).join("")}</section>` : "";
+    }).join("") : `<div class="task-list">${visible.map(renderRow).join("")}</div>`;
     document.querySelectorAll(".edit-row").forEach((row) => {
       if (drafts.get(row.dataset.task)?.saving) row.querySelectorAll("input,select,button").forEach((input) => { input.disabled = true; });
     });
   }
+  if (pendingNew) $("#tasks").innerHTML = pendingNew + $("#tasks").innerHTML;
+  $("#tasks").scrollTop = listScroll;
   if (focusAttribute) $("#tasks").querySelector(`[${focusAttribute}="${CSS.escape(focusValue)}"]`)?.focus({preventScroll:true});
+  renderTaskNavigation();
   renderSelection();
+}
+
+function isRequired(field) { return taskFormat.required_fields.includes(field.field); }
+// The display names of required fields this draft leaves unset. Closed
+// tasks are history, not work to shape: the CLI doesn't check them either.
+function missingRequired(draft) {
+  if (["done", "cancelled"].includes(draft.values.state)) return [];
+  return fields.filter((field) => isRequired(field) && !(draft.values.fields[field.field] || "").trim()).map((field) => field.display_name);
+}
+function formatGuide() {
+  return taskFormat.guide ? `<details class="format-guide"><summary>How this project writes tasks</summary><p class="help">${escapeHtml(taskFormat.guide.trim()).replace(/\n/g,"<br>")}</p></details>` : "";
 }
 
 function fieldControl(field, value, extra = "") {
@@ -257,28 +463,54 @@ function fieldControl(field, value, extra = "") {
   return `<input ${attr} value="${escapeHtml(value)}" placeholder="Not set">`;
 }
 
-function renderRow(task) {
+function renderInlineRow(task) {
   const d = inline === task.id ? draftFor(task.id) : null;
   const value = (key) => escapeHtml(d.values[key]);
   return `<tr data-task="${task.id}" class="${d ? "edit-row" : ""}"><td><input type="checkbox" data-select="${task.id}" aria-label="Select task ${task.num}" ${selected.has(task.id) ? "checked" : ""}></td><td class="title-cell"><span class="task-num">Task ${task.num}</span>${d ? `<input class="title-input" data-input="title" aria-label="Task title" value="${value("title")}">` : `<button class="card-title row-title" data-open="${task.id}">${escapeHtml(task.title)}</button>`}<div class="row-sub">${task.blocked ? badge("Waiting on tasks","blocked") : ""}${held(task) ? badge(task.lease.holder,"holder") : ""}${dirty(task.id) ? badge("Unsaved","draft") : ""}</div></td><td>${stateSelect(task,d)}</td><td>${d ? `<select data-input="priority" aria-label="Priority">${options(priorities,d.values.priority)}</select>` : badge(priorities[task.priority],task.priority)}</td><td>${d ? `<input data-input="assignee" aria-label="Assignee" value="${value("assignee")}">` : escapeHtml(task.assignee || "—")}</td><td>${d ? `<input data-input="labels" aria-label="Labels, comma separated" value="${value("labels")}">` : task.labels.map((tag) => badge(tag)).join(" ") || "—"}</td>${fields.map((field) => `<td>${d ? fieldControl(field,d.values.fields[field.field] || "") : escapeHtml(task.fields[field.field] || "—")}</td>`).join("")}<td>${badge(exportLabel(task),exportState(task))}</td><td><div class="row-actions">${d ? `<button data-save="${task.id}" class="primary" ${d.saving ? "disabled" : ""}>${d.saving ? "Saving…" : "Save"}</button><button data-discard="${task.id}" ${d.saving ? "disabled" : ""}>Cancel</button>` : `<button data-inline="${task.id}">Edit</button>`}</div></td></tr>${d?.error ? `<tr class="row-error"><td colspan="${8 + fields.length}"><p role="alert">${escapeHtml(d.error)}</p><button data-open="${task.id}">Open task to compare</button></td></tr>` : ""}`;
 }
 
+function renderRow(task) {
+  if (inline === task.id) return `<div class="inline-table"><table><tbody>${renderInlineRow(task)}</tbody></table></div>`;
+  return `<div class="task-row ${active === task.id ? "active" : ""} ${selected.has(task.id) ? "selected" : ""}" data-task="${task.id}"><input type="checkbox" data-select="${task.id}" aria-label="Select task ${task.num}" ${selected.has(task.id) ? "checked" : ""}><span class="state-mark ${task.state}" title="${statuses[task.state]}" aria-label="${statuses[task.state]}"></span><span class="task-num">#${task.num}</span><button class="row-title" data-open="${task.id}" title="${escapeHtml(task.title)}" ${active === task.id ? 'aria-current="true"' : ""}>${escapeHtml(task.title)}</button><span class="row-indicators">${held(task) ? `<span class="holder-indicator" title="${escapeHtml(`${task.lease.holder} is working on this task and controls its status`)}">${escapeHtml(task.lease.holder)}</span>` : ""}${dirty(task.id) ? '<span class="draft-dot" title="Unsaved changes" aria-label="Unsaved changes"></span>' : ""}${task.blocked ? '<span class="waiting-icon" title="Waiting on other tasks" aria-label="Waiting on other tasks">◷</span>' : ""}${task.media?.length ? `<span class="attachment-indicator" title="${task.media.length} attachments">▧ ${task.media.length}</span>` : ""}</span><span class="row-tags">${task.labels.slice(0,2).map(tag=>badge(tag)).join("")}${task.labels.length>2 ? `<span class="more-tags" title="${escapeHtml(task.labels.join(", "))}">+${task.labels.length-2}</span>` : ""}</span><span class="row-priority"><span class="priority-dot ${task.priority}"></span>${priorities[task.priority]}</span><span class="owner-avatar ${task.assignee ? "assigned" : ""}" title="${escapeHtml(task.assignee || "Unassigned")}">${escapeHtml(task.assignee?.slice(0,2).toUpperCase() || "–")}</span><button class="row-edit quiet-button" data-inline="${task.id}" aria-label="Quick edit task ${task.num}" title="Quick edit">✎</button></div>`;
+}
+
 function renderSelection() {
   const visible = visibleTasks(), count = visible.filter((task) => selected.has(task.id)).length;
+  const pendingNew = workspaceScope === "drafts" && drafts.has("new") ? 1 : 0;
   const hidden = selected.size - count;
   $("#select-visible").checked = visible.length > 0 && count === visible.length;
   $("#select-visible").indeterminate = count > 0 && count < visible.length;
-  $("#select-visible").disabled = !visible.length;
-  $("#selection-label").textContent = selected.size ? `${selected.size} selected${hidden ? ` · ${hidden} hidden by filters` : ""}` : "Select visible";
+  $("#select-visible").disabled = !visible.length || bulkBusy;
+  $("#selection-label").textContent = selected.size ? `${selected.size} selected${hidden ? ` · ${hidden} outside this view` : ""}` : "Select all";
   $("#clear-selection").hidden = !selected.size;
-  $("#task-count").textContent = `${visible.length} of ${tasks.length} tasks`;
+  $("#task-count").textContent = workspaceScope === "drafts" ? `${visible.length + pendingNew} unsaved ${visible.length + pendingNew === 1 ? "draft" : "drafts"}` : `${visible.length} of ${tasks.length} tasks`;
   $("#export-count").textContent = selected.size;
-  $("#export-button").disabled = !selected.size || !connected;
+  $("#export-button").disabled = !selected.size || !connected || bulkBusy;
   const countDrafts = dirtyIds().length;
   $("#draft-count").textContent = countDrafts ? `${countDrafts} unsaved ${countDrafts === 1 ? "draft" : "drafts"}` : "";
   const saveLabel = $(".save-label");
   if (saveLabel && active) saveLabel.textContent = dirty(active) ? "Unsaved changes" : "All changes saved";
-  for (const button of document.querySelectorAll("[data-save]")) button.disabled = Boolean(drafts.get(button.dataset.save)?.saving || drafts.get(button.dataset.save)?.upload);
+  for (const button of document.querySelectorAll("[data-save]")) button.disabled = bulkTargets.has(button.dataset.save) || Boolean(drafts.get(button.dataset.save)?.saving || drafts.get(button.dataset.save)?.upload);
+  for (const checkbox of document.querySelectorAll("[data-select]")) { checkbox.checked=selected.has(checkbox.dataset.select); checkbox.disabled=bulkBusy; }
+  for (const row of document.querySelectorAll(".task-row,.card")) row.classList.toggle("selected",selected.has(row.dataset.task));
+  // The bulk controls replace the counts in the same row, so selecting a task
+  // never moves the list under the pointer.
+  const bulkOpen=Boolean(selected.size || bulkBusy);
+  $("#bulk-bar").hidden=!bulkOpen;
+  $(".selection-bar").classList.toggle("has-selection",bulkOpen);
+  $("#bulk-apply").textContent=bulkBusy ? "Applying…" : `Apply to ${selected.size} ${selected.size === 1 ? "task" : "tasks"}`;
+  $("#bulk-apply").disabled=bulkBusy || !connected || !selected.size || !bulkReady(bulkChoice());
+  for (const control of [$("#bulk-field"),$("#bulk-value"),$("#clear-selection")]) if (control) control.disabled=bulkBusy;
+  $("#bulk-note").textContent=$("#bulk-note").title=bulkBusy ? "" : bulkNote();
+  $("#heading-count").textContent=visible.length + pendingNew;
+  const scopes={all:"All tasks",active:"Active tasks",done:"Completed",blocked:"Waiting",drafts:"Unsaved drafts"};
+  $("#view-title").textContent=scopes[workspaceScope];
+  const counts={all:tasks.filter(t=>t.state!=="cancelled").length,active:tasks.filter(t=>["todo","doing"].includes(t.state)).length,done:tasks.filter(t=>t.state==="done").length,blocked:tasks.filter(t=>t.blocked).length,drafts:countDrafts};
+  for (const button of document.querySelectorAll("[data-scope]")) button.setAttribute("aria-current",button.dataset.scope === workspaceScope ? "page" : "false");
+  for (const count of document.querySelectorAll("[data-scope-count]")) count.textContent=counts[count.dataset.scopeCount];
+  const filterCount=["#status-filter","#priority-filter","#label-filter","#export-filter"].filter(id=>$(id).value).length+Object.values(fieldFilters).filter(Boolean).length+Number($("#show-cancelled").checked);
+  $("#filter-count").textContent=filterCount || "";
+  $("#filter-toggle").classList.toggle("filtered",Boolean(filterCount));
 }
 
 function renderEditor() {
@@ -289,24 +521,33 @@ function renderEditor() {
   const d = drafts.get(active), task = taskById(active) || d.base;
   const value = (key) => escapeHtml(d.values[key]);
   $("#editor").innerHTML = `
-    <div class="editor-heading"><h2 tabindex="-1" id="editor-heading">${active === "new" ? "New task" : `Task ${task.num}`}</h2><button data-action="close-editor" aria-label="Close task editor">Back to tasks</button></div>
-    <div id="task-navigation" class="task-navigation" aria-label="Review navigation"></div>
-    <div class="editor-body">
+    <div class="editor-heading"><h2 tabindex="-1" id="editor-heading">${active === "new" ? "New task" : `Task ${task.num}`}</h2><div id="task-navigation" class="task-navigation" aria-label="Review navigation"></div><button data-action="close-editor" aria-label="Close task editor" title="Close · Esc">×</button></div>
+    <div class="editor-body"><fieldset class="task-form" ${d.saving || bulkTargets.has(active) ? "disabled" : ""}>
       ${d.error ? `<div class="notice error" role="alert">${escapeHtml(d.error)}</div>` : ""}
       ${d.latest && dirty(active) ? `<div class="notice">Someone updated this task. Your changes are still here.<details open><summary>Compare with the saved task</summary><dl class="comparison"><dt>Title</dt><dd>${escapeHtml(d.latest.title)}</dd><dt>Status / Priority</dt><dd>${statuses[d.latest.state]} / ${priorities[d.latest.priority]}</dd><dt>Owner / Tags</dt><dd>${escapeHtml(d.latest.assignee || "Unassigned")} / ${escapeHtml(d.latest.labels.join(", ") || "None")}</dd>${fields.map((f) => `<dt>${escapeHtml(f.display_name)}</dt><dd>${escapeHtml(d.latest.fields[f.field] || "Not set")}</dd>`).join("")}<dt>Description</dt><dd>${escapeHtml(d.latest.body || "No description")}</dd></dl></details><button data-action="rebase" ${d.upload ? "disabled" : ""}>Keep my edits and review</button></div>` : ""}
-      <label class="form-field"><span>Task title</span><textarea rows="2" data-input="title" id="editor-title" placeholder="What needs doing?" ${d.saving ? "disabled" : ""}>${value("title")}</textarea></label>
-      <div class="form-pair"><label class="form-field"><span>Status</span><select data-input="state" ${held(task) || active === "new" || d.saving ? "disabled" : ""}>${options(statuses,d.values.state)}</select></label><label class="form-field"><span>Priority</span><select data-input="priority" ${d.saving ? "disabled" : ""}>${options(priorities,d.values.priority)}</select></label></div>
+      <label class="form-field title-field"><span class="sr-only">Task title</span><textarea rows="1" data-input="title" id="editor-title" placeholder="What needs doing?" ${d.saving ? "disabled" : ""}>${value("title")}</textarea></label>
+      <div class="property-row"><label class="form-field"><span>Status</span><select data-input="state" ${held(task) || active === "new" || d.saving ? "disabled" : ""}>${options(statuses,d.values.state)}</select></label><label class="form-field"><span>Priority</span><select data-input="priority" ${d.saving ? "disabled" : ""}>${options(priorities,d.values.priority)}</select></label><label class="form-field"><span>Owner</span><input data-input="assignee" value="${value("assignee")}" placeholder="Unassigned"></label></div>
       ${held(task) ? `<p class="help">${escapeHtml(task.lease.holder)} is working on this task. You can edit its details; they control its status.</p>` : ""}
-      <details class="organize-task"><summary>Owner, tags & organization</summary><label class="form-field"><span>Owner</span><input data-input="assignee" value="${value("assignee")}" placeholder="Unassigned" ${d.saving ? "disabled" : ""}></label><label class="form-field"><span>Tags</span><input data-input="labels" value="${value("labels")}" placeholder="Separate tags with commas" ${d.saving ? "disabled" : ""}></label>${fields.map((field) => `<label class="form-field"><span>${escapeHtml(field.display_name)}</span>${fieldControl(field,d.values.fields[field.field] || "",d.saving ? "disabled" : "")}</label>`).join("")}</details>
-      ${screenshotsEditor()}
+      ${active === "new" ? formatGuide() : ""}
+      <details class="organize-task" ${missingRequired(d).length ? "open" : ""}><summary>Tags & properties <span>${escapeHtml(missingRequired(d).length ? `Required: ${missingRequired(d).join(", ")}` : d.values.labels || "Add details")}</span></summary><label class="form-field"><span>Tags</span><input data-input="labels" value="${value("labels")}" placeholder="Separate tags with commas" ${d.saving ? "disabled" : ""}></label>${fields.map((field) => `<label class="form-field"><span>${escapeHtml(field.display_name)}${isRequired(field) ? ' <em class="required-mark" title="This project\'s task format requires it">required</em>' : ""}</span>${fieldControl(field,d.values.fields[field.field] || "",d.saving ? "disabled" : "")}</label>`).join("")}</details>
+      <div class="task-tools"><button data-action="add-media" class="quiet-button">+ Attach screenshot</button>${task.media?.length ? `<button data-action="show-attachments" class="quiet-button">▧ ${task.media.length} attachments ↓</button>` : ""}</div>
       ${descriptionEditor(d)}
+      ${screenshotsEditor()}
       ${active !== "new" ? `<details><summary>Related tasks & history</summary><div id="task-history">Loading history…</div></details>` : ""}
-    </div>
-    <div class="editor-actions"><span class="save-label" role="status">${dirty(active) ? "Unsaved changes" : "All changes saved"}</span><button data-discard="${active}" ${d.saving ? "disabled" : ""}>Discard changes</button><button data-save="${active}" ${d.saving ? "disabled" : ""}>${d.saving ? "Saving…" : "Save changes"}</button>${active !== "new" ? '<button id="save-next" data-action="save-next" class="primary">Save & next →</button>' : ""}</div>`;
+    </fieldset></div>
+    <div class="editor-actions"><span class="save-label" role="status">${dirty(active) ? "Unsaved changes" : "All changes saved"}</span><button data-discard="${active}" class="quiet-button" ${d.saving || bulkTargets.has(active) ? "disabled" : ""}>Discard</button><button data-save="${active}" class="primary" ${d.saving ? "disabled" : ""}>${d.saving ? "Saving…" : "Save"}</button>${active !== "new" ? '<button id="save-next" data-action="save-next">Save & next</button>' : ""}</div>`;
   renderTaskNavigation();
+  fitTaskTitle();
   if (active !== "new") loadHistory(active);
   previewDescription();
   renderUploadState(active);
+}
+
+function fitTaskTitle() {
+  const title = $("#editor-title");
+  if (!title) return;
+  title.style.height = "auto";
+  title.style.height = `${title.scrollHeight + 2}px`;
 }
 
 function descriptionEditor(d) {
@@ -335,22 +576,22 @@ function mediaHelp() {
 function renderUploadState(id) {
   if (active !== id || !$("#add-media")) return;
   const d = drafts.get(id);
-  $("#add-media").disabled = d.saving || Boolean(d.upload);
+  $("#add-media").disabled = d.saving || Boolean(d.upload) || bulkTargets.has(id);
   $("#add-media").textContent = d.upload ? "Adding files…" : "+ Add screenshots / files";
-  $("#description-source").disabled = d.saving || Boolean(d.upload);
+  $("#description-source").disabled = d.saving || Boolean(d.upload) || bulkTargets.has(id);
   $("#media-status").textContent = d.mediaMessage;
   $("#media-status").hidden = !d.mediaMessage;
   $("#media-errors").textContent = d.mediaErrors.join("\n");
   $("#media-errors").hidden = !d.mediaErrors.length;
   $("#media-formats").textContent = mediaHelp();
   const nextButton = $("#save-next");
-  if (nextButton) nextButton.disabled = !adjacentTask(1) || d.saving || Boolean(d.upload);
+  if (nextButton) nextButton.disabled = !adjacentTask(1) || d.saving || Boolean(d.upload) || bulkTargets.has(id);
   renderSelection();
 }
 
 function chooseMedia() {
   const d = drafts.get(active);
-  if (!d || d.saving || d.upload) return;
+  if (!d || d.saving || d.upload || bulkTargets.has(active)) return;
   // Capture the draft and insertion point before the native picker opens.
   // Its eventual result must not belong to whichever task is active later.
   const source = $("#description-source");
@@ -364,7 +605,7 @@ function pasteScreenshots(event) {
   const files = [...(event.clipboardData?.items || [])].filter(item => item.kind === "file" && item.type.startsWith("image/")).map(item => item.getAsFile()).filter(Boolean);
   if (!files.length) return;
   const d = drafts.get(active);
-  if (!d || d.saving || d.upload) return;
+  if (!d || d.saving || d.upload || bulkTargets.has(active)) return;
   event.preventDefault();
   const source = $("#description-source");
   addMedia(files,{id:active,d,offset:d.descriptionMode === "write" ? source.selectionEnd : d.values.body.length});
@@ -560,11 +801,15 @@ function openTask(id) {
   $("#editor-heading")?.focus({preventScroll:true});
 }
 function createTask() {
-  if (!drafts.has("new")) drafts.set("new",newDraft({id:"new",seq:0,title:"",body:null,state:"todo",priority:"none",assignee:null,labels:[],fields:{},relations:[]}));
+  if (!drafts.has("new")) {
+    const draft = newDraft({id:"new",seq:0,title:"",body:null,state:"todo",priority:"none",assignee:null,labels:[],fields:{},relations:[]});
+    draft.values.body = taskFormat.template || "";
+    drafts.set("new",draft);
+  }
   openTask("new"); $("#editor-title").focus();
 }
 function discard(id) {
-  if (drafts.get(id)?.saving) return;
+  if (drafts.get(id)?.saving || bulkTargets.has(id)) return;
   drafts.get(id)?.upload?.abort();
   drafts.delete(id);
   if (inline === id) inline = null;
@@ -574,14 +819,14 @@ function discard(id) {
 
 async function saveDraft(id) {
   const d = drafts.get(id);
-  if (!d || d.saving || d.upload) return false;
+  if (!d || d.saving || d.upload || bulkTargets.has(id)) return false;
   if (id !== "new" && !dirty(id)) { toast("No changes to save."); return true; }
   d.saving = true; d.error = "";
   if (active === id) renderEditor();
   if (inline === id) renderTasks();
   try {
     const payload = id === "new" ? {title:d.values.title,priority:d.values.priority,body:d.values.body.trim() ? d.values.body : null,assignee:d.values.assignee.trim() || null,labels:tags(d.values.labels),fields:Object.fromEntries(Object.entries(d.values.fields).filter(([,v]) => v.trim()))} : patchFor(d);
-    const saved = await api(id === "new" ? "/api/tasks" : `/api/task/${id}`,id === "new" ? "POST" : "PATCH",payload);
+    const saved = await write(id === "new" ? "/api/tasks" : `/api/task/${id}`,id === "new" ? "POST" : "PATCH",payload);
     const index = tasks.findIndex((task) => task.id === saved.id);
     if (index < 0) tasks.push(saved); else tasks[index] = saved;
     drafts.delete(id);
@@ -621,11 +866,12 @@ function rebaseDraft() {
 }
 
 async function moveTask(id, state) {
+  if (bulkBusy) return;
   const task = taskById(id);
   if (!task || task.state === state) return;
   if (dirty(id) || held(task)) { toast(dirty(id) ? "Save or discard this task's draft before moving it." : "The holder controls this task's status.",true); renderTasks(); return; }
   try {
-    const saved = await api(`/api/task/${id}`,"PATCH",{base:task.seq,state});
+    const saved = await write(`/api/task/${id}`,"PATCH",{base:task.seq,state});
     tasks[tasks.findIndex((t) => t.id === id)] = saved;
     if (active === id) drafts.set(id,newDraft(saved));
     renderTasks(); renderEditor(); toast(`Moved to ${statuses[state]}.`); await refresh();
@@ -695,7 +941,7 @@ async function saveExport() {
   $("#refresh-preview").disabled = true;
   $("#save-export").textContent = "Saving…";
   try {
-    const result = await api("/api/export/save","POST",{ids:preview.ids,again:preview.again,review:preview.review,path:$("#export-path").value});
+    const result = await write("/api/export/save","POST",{ids:preview.ids,again:preview.again,review:preview.review,path:$("#export-path").value});
     for (const task of result.exported) selected.delete(task.id);
     $("#export-result").textContent = `Saved ${result.exported.length} ${result.exported.length === 1 ? "task" : "tasks"} to:\n${result.file}${result.media_files.length ? `\n${result.media_files.length} media files copied beside the CSV.` : ""}\nImport this file into Notion. Exporting does not confirm an import.`;
     $("#export-result").hidden = false;
@@ -715,11 +961,29 @@ async function saveExport() {
   }
 }
 
+function clearSelection() {
+  if (bulkBusy) return;
+  selected.clear(); lastSelected=null; renderSelection();
+}
+
+function closeEditor() {
+  const id=active; active=null; renderEditor(); renderTasks();
+  $(`#tasks [data-open="${CSS.escape(id || "")}"]`)?.focus({preventScroll:true});
+}
+
+function resetFilters() {
+  for (const selector of ["#search","#status-filter","#priority-filter","#label-filter","#export-filter"]) $(selector).value="";
+  $("#show-cancelled").checked=false; fieldFilters={};
+  for (const field of document.querySelectorAll("[data-filter-field]")) field.value="";
+  renderTasks();
+}
+
 document.addEventListener("click", (event) => {
+  if (event.target.dataset.select) { selectTask(event.target.dataset.select,event.target.checked,event.shiftKey); return; }
   const button = event.target.closest("button");
   if (!button || button.disabled) return;
   if (button.dataset.open) openTask(button.dataset.open);
-  if (button.dataset.inline) {
+  if (button.dataset.inline && !bulkBusy) {
     const id = button.dataset.inline;
     if (!dirty(id)) drafts.set(id,newDraft(taskById(id)));
     inline = id; if (active === id) active = null;
@@ -733,8 +997,13 @@ document.addEventListener("click", (event) => {
   if (button.dataset.viewMedia) openMediaViewer(button);
   if (button.dataset.action === "save-next") saveAndNext();
   if (button.dataset.action === "add-media") chooseMedia();
+  if (button.dataset.action === "show-attachments") $(".screenshots-section")?.scrollIntoView({block:"start",behavior:"smooth"});
+  if (button.dataset.action === "undo-bulk") undoBulkChange();
+  if (button.dataset.action === "dismiss-bulk") { bulkResult=null; renderBulkResult(); }
+  if (button.dataset.action === "reset-filters") { workspaceScope="all"; resetFilters(); }
+  if (button.dataset.scope) { workspaceScope=button.dataset.scope; $("#status-filter").value=""; renderTasks(); }
   if (button.dataset.action === "new") createTask();
-  if (button.dataset.action === "close-editor") { active = null; renderEditor(); renderTasks(); }
+  if (button.dataset.action === "close-editor") closeEditor();
   if (button.dataset.action === "rebase") rebaseDraft();
 });
 function inputDraft(event) {
@@ -742,9 +1011,10 @@ function inputDraft(event) {
   if (!input.hasAttribute("data-input") && !input.hasAttribute("data-input-field")) return;
   const id = input.closest("#editor") ? active : input.closest("tr[data-task]")?.dataset.task;
   const d = drafts.get(id);
-  if (!d || d.saving) return;
+  if (!d || d.saving || bulkTargets.has(id)) return;
   if (input.hasAttribute("data-input-field")) d.values.fields[input.dataset.inputField] = input.value;
   else d.values[input.dataset.input] = input.value;
+  if (input.id === "editor-title") fitTaskTitle();
   if (input.dataset.input === "body" && id === active) {
     clearDescriptionPreview();
     descriptionTimer = setTimeout(previewDescription,400);
@@ -758,19 +1028,23 @@ document.addEventListener("change", (event) => {
   if (input.id === "task-chooser") { if (input.value) openTask(input.value); return; }
   if (input.id === "media-picker") { const selection = mediaPicker; mediaPicker = null; addMedia([...input.files],selection); return; }
   inputDraft(event);
-  if (input.dataset.select) { if (input.checked) selected.add(input.dataset.select); else selected.delete(input.dataset.select); renderSelection(); }
   if (input.dataset.move) moveTask(input.dataset.move,input.value);
   if (input.hasAttribute("data-filter-field")) { fieldFilters[input.dataset.filterField] = input.value; renderTasks(); }
 });
 document.addEventListener("keydown", (event) => {
-  if (event.defaultPrevented || $("#media-dialog").open || $("#export-dialog").open) return;
-  const editing = event.target.closest("input,textarea,select,[contenteditable=true]");
+  if (event.defaultPrevented || $("#media-dialog").open || $("#export-dialog").open || $("#shortcuts-dialog").open) return;
+  // A focused checkbox (the usual state after clicking one) isn't typing.
+  const editing = event.target.closest("input:not([type=checkbox]):not([type=radio]),textarea,select,[contenteditable=true]");
   if (active && !editing && event.altKey && ["ArrowLeft","ArrowRight"].includes(event.key)) {
     event.preventDefault(); navigateTask(event.key === "ArrowLeft" ? -1 : 1); return;
   }
   if (active && !editing && event.key === "Escape") {
-    event.preventDefault(); active = null; renderEditor(); renderTasks(); return;
+    event.preventDefault(); closeEditor(); return;
   }
+  if (!editing && !event.metaKey && !event.ctrlKey && !event.altKey && event.key === "/") { event.preventDefault(); $("#search").focus(); return; }
+  if (!editing && !event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === "c") { event.preventDefault(); createTask(); return; }
+  if (!editing && event.key === "Escape") clearSelection();
+  if (!editing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a" && event.target.closest("#tasks,.selection-bar") && !bulkBusy) { event.preventDefault(); reviewTasks().forEach(task=>selected.add(task.id)); renderSelection(); }
   const row = event.target.closest("tr.edit-row");
   if (row && event.target.tagName === "INPUT" && event.target.type !== "checkbox") {
     if (event.key === "Enter") { event.preventDefault(); saveDraft(row.dataset.task); }
@@ -804,8 +1078,18 @@ $("#board-view").onclick = () => { view = "board"; inline = null; renderTasks();
 $("#list-view").onclick = () => { view = "list"; renderTasks(); };
 $("#new-task").onclick = createTask;
 $("#export-button").onclick = openExport;
-$("#select-visible").onchange = (event) => { for (const task of visibleTasks()) { if (event.target.checked) selected.add(task.id); else selected.delete(task.id); } renderTasks(); };
-$("#clear-selection").onclick = () => { selected.clear(); renderTasks(); };
+$("#select-visible").onchange = (event) => { if (bulkBusy) return; for (const task of visibleTasks()) { if (event.target.checked) selected.add(task.id); else selected.delete(task.id); } renderSelection(); };
+$("#clear-selection").onclick = clearSelection;
+$("#bulk-field").onchange = renderBulkValue;
+$("#bulk-value-control").addEventListener("input",renderSelection);
+$("#bulk-value-control").addEventListener("change",renderSelection);
+$("#bulk-apply").onclick = () => runBulkChange(bulkChoice());
+$("#filter-toggle").onclick = () => { $("#filters").hidden=!$("#filters").hidden; $("#filter-toggle").setAttribute("aria-expanded",String(!$("#filters").hidden)); };
+$("#reset-filters").onclick = resetFilters;
+$("#sort-order").onchange = renderTasks;
+$("#group-by").onchange = renderTasks;
+$("#show-shortcuts").onclick = () => $("#shortcuts-dialog").showModal();
+$("#close-shortcuts").onclick = () => $("#shortcuts-dialog").close();
 $("#search").oninput = renderTasks;
 for (const selector of ["#status-filter","#priority-filter","#label-filter","#export-filter","#show-cancelled"]) $(selector).onchange = renderTasks;
 $("#close-export").onclick = () => { if (!exporting) { previewVersion++; $("#export-dialog").close(); } };
@@ -815,7 +1099,7 @@ $("#refresh-preview").onclick = previewExport;
 $("#save-export").onclick = saveExport;
 $("#close-media").onclick = closeMediaViewer;
 $("#media-dialog").addEventListener("close", () => $("#media-viewer-content").replaceChildren());
-window.addEventListener("beforeunload", (event) => { if (dirtyIds().length || exporting) { event.preventDefault(); event.returnValue = ""; } });
+window.addEventListener("beforeunload", (event) => { if (dirtyIds().length || exporting || bulkBusy) { event.preventDefault(); event.returnValue = ""; } });
 window.addEventListener("focus",refresh);
 setInterval(() => { if (!document.hidden) refresh(); },5000);
 refresh();

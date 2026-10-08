@@ -39,25 +39,36 @@ hippo-task init --folder ~/tasks/my-project   # …or in another folder, outside
 - **Git:** if the tasks would sit inside a git repository, `init` keeps them out of it by default, with a `.gitignore` inside the store folder. It never edits your repository's own `.gitignore`. Pass `--keep-in-git` to let them be committed — then anyone who can read the repository can read every title and note.
 - **Another folder:** the project keeps a small pointer, `.hippotask/store.json`, which is always kept out of git (it names a path on this machine).
 - **Found from anywhere:** every command looks for the nearest `.hippotask/` in the current folder and the ones above it, never climbing out of a git repository. Without one, commands exit 2 and ask for `hippo-task init` — nothing is ever created by accident.
-- **Agents:** add one line to the project's AGENTS.md — *"This project tracks tasks with hippo-task; run `hippo-task guide` before you start."* `hippo-task guide` prints the protocol from the installed binary, so it can't go stale.
-- **Session end:** launch each agent window with its own identity (`HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude`) and add this Claude Code hook to `.claude/settings.local.json`, so the window's tasks go back when its session ends:
+- **Agents:** give them the skill, so they don't read a guide every session:
+
+  ```bash
+  hippo-task skill --to .claude/skills      # this project: commit it, and every teammate's agent has it
+  hippo-task skill --to ~/.claude/skills    # or just you, in every project
+  ```
+
+  It writes an [Agent Skill](https://agentskills.io) — `hippo-task/SKILL.md` plus `references/json.md` — generated from the installed binary. An agent loads its two-line description at startup and the protocol only when it works on tasks. Codex, Gemini CLI, Copilot, Cursor and others read the same format from their own skills folder: pass that folder to `--to`. Re-run it after upgrading. Then add one line to the project's AGENTS.md — *"Tasks are coordinated with hippo-task: use its skill, or run `hippo-task guide` if you have none."* `hippo-task guide` prints the same protocol.
+- **Identity and session end (Claude Code):** add these hooks to `.claude/settings.json` (commit it, for the whole team) or `~/.claude/settings.json` (you, every project). Each session then acts as `agent:claude` on its own node — `claude-` plus 8 characters of its session id — and gives back what it holds when it ends:
 
 ```json
-{ "hooks": { "SessionEnd": [ { "hooks": [ { "type": "command", "command": "hippo-task release --all" } ] } ] } }
+{ "hooks": {
+  "SessionStart": [ { "hooks": [ { "type": "command", "command": "hippo-task hook session-start" } ] } ],
+  "SessionEnd":   [ { "hooks": [ { "type": "command", "command": "hippo-task hook session-end" } ] } ]
+} }
 ```
 
-  It runs on `/exit`, `/clear`, logout and resume — not on a crash, which still needs a person to `reclaim`.
+  A window launched with its own identity (`HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude`) keeps it. The node comes from the random id Claude Code gives each session, not from you or your machine. `session-end` runs on `/exit`, `/clear`, logout and resume — not reliably on a crash or a killed window, which still needs a person to `reclaim`. In a project without tasks, both do nothing. **Other agents:** launch each window with its own identity, and run `hippo-task release --all` from its exit hook.
 
 ## Use
 
 ```bash
-hippo-task guide                                 # the protocol agents follow
+hippo-task guide                                 # the protocol agents follow (or install it: hippo-task skill --to <folder>)
 hippo-task add "Write the RFC" --priority high --label docs --body "Scope: the v1 schema"
 hippo-task list                                  # every task, by number
 hippo-task list --state todo --sort priority     # also: --mine, --blocked, --sort created|updated
 hippo-task list --ready --sort priority          # what can be picked up now: open, unblocked, not held
 hippo-task list --held                           # who holds what, and how long each has been quiet
-hippo-task list --search token_refresh           # before filing: is this already on the list? (title or description)
+hippo-task similar "Token refresh fails after a 401"  # before filing: the tasks most like it, best first
+hippo-task list --search token_refresh           # an exact term, in titles or descriptions
 hippo-task show 3                                # one task + its full history
 hippo-task update 3 --priority urgent --label-add api --block 2
 hippo-task update 3 --unblock 2 --unassign
@@ -69,6 +80,7 @@ hippo-task desc 3 --file note.md          # markdown; a local screenshot is copi
 hippo-task desc 3 --base 4 "updated text" # merge with the description as of seq 4
 hippo-task release 3                             # hand it back unfinished: back to todo, free for the next worker
 hippo-task release --all                         # on exit: give back everything this worker holds
+hippo-task hook session-end                      # the same, as a Claude Code hook (see above)
 hippo-task reclaim 3 --reason "window closed"    # a person takes back a stuck worker's task (--from <node>: all of it)
 hippo-task done 3                                # complete (and release)
 ```
@@ -101,6 +113,32 @@ hippo-task list --field project=dashboard --label bug # filters combine
 ```
 
 A field that isn't declared, or a value that isn't on its list, is refused with the closest match ("did you mean `dashboard`?"). Changing the config never changes a task: a value the config no longer allows stays on its tasks, and `hippo-task fields` lists it so you can fix it.
+
+## Task format: how this team writes tasks
+
+Every team writes tasks its own way. Declare yours in the same `config.toml`, and agents and people see it before they file:
+
+```toml
+[format]
+guide = """
+Titles start with a verb and name the thing: "Fix token refresh on 401".
+One outcome per task. If the title needs "and", split it.
+"""
+template = """
+## Why
+
+## Done when
+- [ ]
+"""
+required_fields = ["project"]       # must be declared under [fields.…]
+required_sections = ["Done when"]   # headings that need text under them
+```
+
+```bash
+hippo-task format                      # the conventions, or an example to start from
+```
+
+The format guides; it doesn't gate. A task that misses part of it — a required field unset, a required section empty or missing — is still written, and `add`, `desc`, and `update --body` / `--field` print one warning per gap, naming the fix. A section counts when its heading (any level, ignoring case and a trailing colon) has text under it; an untouched template doesn't. Closed tasks are never checked. The UI starts new tasks from the template.
 
 ## Upload to Notion
 
@@ -145,7 +183,7 @@ Errors go to stderr as `error: …` (a JSON line with `--json`); results go to s
 - **Whoever knows hands work back:** `release` by the holder returns a started task to `todo`, and `release --all` gives back everything a worker holds — run it from a session's exit hook or a workflow's cleanup. A worker that can't (it crashed, or its window closed) keeps its claim until a person — or the orchestrator that launched it — runs `reclaim` (agents need `--force`); `list --held` shows who's been quiet. Every reclaim is recorded, with its reason.
 - **State belongs to the holder:** while someone holds a task, only they can change its state — including completing or cancelling it. Everyone can still edit title, priority, labels, notes. `--force` overrides the state for a human; it doesn't take the claim — `reclaim` does. Closing clears the claim. A closed task can't be started (exit 4) — reopen it with `hippo-task update 3 --state todo`; notes, labels, title, and priority stay editable, and `hippo-task done 3` on a task that's already done is recorded but changes nothing (on a cancelled task it completes it — no refusal).
 - **Blocked is derived:** an open task is blocked while any task it's blocked by is still open. A closed task is never blocked.
-- **Duplicates are found, then marked:** `list --search` matches the title, the description, image captions, and the URLs of links (a PR, an issue), ignoring case, in any state — not an image's target, such as the `media/…` path of a file. Check it before filing. `update --duplicate-of` links a duplicate to its original and cancels it, so it never counts as finished work; closing it follows the same holder rule as any other close. A duplicate link never blocks.
+- **Duplicates are found, then marked:** `similar` ranks tasks by the distinctive words they share with what you're about to file — rare words count most, and identifiers like `session_token` stay whole — in any state, skipping tasks already marked duplicate. `list --search` matches an exact term in the title, the description, image captions, and the URLs of links (a PR, an issue), ignoring case. Neither looks at an image's target, such as the `media/…` path of a file. Check before filing; `add` also warns when an open task already has the same title (ignoring case and punctuation), and still creates it. `update --duplicate-of` links a duplicate to its original and cancels it, so it never counts as finished work; closing it follows the same holder rule as any other close. A duplicate link never blocks.
 - **Descriptions are markdown, and anyone may edit them.** `desc`, `add --body`, and `update --body` store the source and copy local images and video into the store's `media/` folder, named by the bytes stored. Write image links inline — `![caption](path)`; a reference-style image of a local file is refused. `desc --base <seq>` merges a concurrent edit by paragraph; if both sides rewrote the same paragraph, the command exits 5 and writes nothing. The description is not reserved for the holder.
 - **Merging, not clobbering:** concurrent label/relation changes all survive; for single fields the last write wins. Repeating a change (adding a label twice) is recorded but changes nothing — shown as `(no change)`.
 
@@ -154,7 +192,7 @@ Errors go to stderr as `error: …` (a JSON line with `--json`); results go to s
 - The ledger is `ledger.jsonl` in the project's store — `.hippotask/`, or the folder chosen with `hippo-task init --folder`. Commands find it from the current folder upward; `--dir` / `HIPPO_DIR` names the project folder explicitly instead (it must exist). One JSON event per line, append-only.
 - Writes are serialized by a file lock and flushed to disk (fsync) before a command reports success. A write that fails is rolled back, so a failed command never leaves half a change behind. Timestamps strictly increase, so the file's order is the true order of events — even within one millisecond.
 - A crash mid-write can leave one unreadable line: every command then warns about it (never silently), and it can't damage later writes. A line written by a newer hippo-task is skipped with a warning to upgrade.
-- The store's settings — the fields it declares — are in `config.toml` next to the ledger. Only the CLI reads it; editing it never rewrites history.
+- The store's settings — the fields it declares, its task format — are in `config.toml` next to the ledger. Only the CLI reads it; editing it never rewrites history.
 - **Privacy:** by default nothing about you or your machine is recorded — no username, no hostname. What you type — titles, notes, descriptions, and any actor name you choose — is stored **in cleartext, and forever** (append-only means it can't be edited out). Don't put secrets or personal data in tasks. Files linked from a description are stored byte for byte, including any metadata the device wrote — a phone photo can carry the place it was taken. Screenshots and screen recordings typically don't. Stripping that metadata is later work. If you commit the store to git, everyone who can read the repo can read it, files included. The store's own `.gitignore` ignores the whole folder (so `media/` with it). A team that commits the store anyway commits those files too, and a 64 MiB video is past the 50 MiB size at which GitHub warns.
 
 ## Optional board and list UI
@@ -164,7 +202,7 @@ browser interface; the terminal process runs until you press Ctrl-C. Nothing
 starts during normal CLI use, and no extra runtime or account is needed.
 
 ```bash
-hippo-task ui                     # open this project's board
+hippo-task ui                     # open this project's task workspace
 hippo-task ui --no-open           # print the URL for manual opening
 hippo-task ui --port 8787         # choose a loopback port (default: available port)
 hippo-task --dir /path/to/project ui
@@ -176,7 +214,22 @@ hippo-task --dir /path/to/project ui
   **Discard** abandons the unsaved draft. Enter saves a single-line row edit,
   Escape cancels it, and Ctrl/Cmd+Enter saves the open task panel. Drafts live
   only in the tab: save them before closing or restarting the UI.
-- An open task has a compact review list, **Previous / Next**, a task chooser,
+- The workspace opens as a compact list grouped by status, with an optional
+  board. Search, filter, sort, and use the sidebar's Active, Completed, Waiting,
+  and Unsaved drafts views. Opening a task keeps the list and checkboxes visible.
+- Select tasks with checkboxes, **Select all**, or Shift-click a range. The
+  selection toolbar changes status, priority, owner, tags, or a custom field.
+  Choose a value, then **Apply to N tasks**. **Unassign owner** and **Clear**
+  *field* are separate choices in the property menu; a blank value never clears
+  anything. Selection stays available for another change or export, including
+  selected tasks outside the current view. A list row shows who holds a task.
+- Bulk changes use conditional saves per task. Unsaved drafts and held status
+  changes are skipped; conflicts and failures are listed individually. A lost
+  connection stops the remaining work and leaves uncertain results for review.
+  **Undo last batch** reverses the most recent batch that changed something,
+  only for tasks that have not changed again. Batches are not atomic across
+  tasks.
+- An open task has **Previous / Next** arrows, a task chooser,
   and **Save & next**. Navigation follows the current filters and retains each
   unsaved draft; Save & next advances only after a successful save. Alt+Left /
   Alt+Right navigate when you're not typing, and Escape returns to the task
@@ -187,7 +240,7 @@ hippo-task --dir /path/to/project ui
 - Concurrent edits cannot silently overwrite a stale metadata draft. Compare
   the latest values and explicitly keep your changes on that version before
   saving again. Description-only edits retain paragraph merging.
-- **Export selected** previews exactly the selected tasks as a Notion-ready
+- **Export** previews exactly the selected tasks as a Notion-ready
   CSV. Save it to a new path, then import it in Notion. If rows or eligibility
   change after preview, refresh and review again. Previously exported tasks
   are skipped unless explicitly included again; Notion imports add rows and
@@ -201,7 +254,7 @@ settings. No username, hostname, task draft, or browser preference is collected.
 Descriptions have **Preview / Edit text** controls and open formatted when
 they contain text. Preview renders your unsaved
 Markdown, including headings, lists, tables, checkboxes, code, and stored images
-or video. Choose Edit text to continue editing; only **Save changes** updates the
+or video. Choose Edit text to continue editing; only **Save** updates the
 task. Raw HTML is displayed as text, and remote images are never fetched.
 
 Use **Add screenshots / files** or paste a copied screenshot while the task

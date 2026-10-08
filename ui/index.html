@@ -3,42 +3,59 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>HippoTask · Your tasks</title>
+  <title>HippoTask · Workspace</title>
+  <meta name="description" content="Review, organize and export your local tasks.">
   <link rel="stylesheet" href="/style.css">
   <script defer src="/app.js"></script>
 </head>
 <body>
-  <header class="app-header">
-    <a class="brand" href="/" aria-label="HippoTask home"><span class="brand-mark">h.</span>HippoTask</a>
-    <span class="header-divider"></span><span id="project-name">Workspace</span>
-    <span id="connection" class="connection">Connecting…</span>
-  </header>
+  <a class="skip-link" href="#tasks">Skip to tasks</a>
+  <div class="app-shell">
+  <aside class="sidebar" aria-label="Workspace navigation">
+    <a class="brand" href="/" aria-label="HippoTask home"><span class="brand-mark">h</span><span class="brand-name">HippoTask</span></a>
+    <div class="workspace-name"><span class="workspace-avatar">W</span><span id="project-name">Workspace</span><span class="local-label">Local</span></div>
+    <p class="nav-heading">Workspace</p>
+    <nav class="workspace-nav">
+      <button data-scope="all" aria-current="page" title="All tasks"><span class="nav-icon">▤</span><span class="nav-label">All tasks</span><span data-scope-count="all" class="nav-count"></span></button>
+      <button data-scope="active" title="Active tasks"><span class="state-mark doing"></span><span class="nav-label">Active</span><span data-scope-count="active" class="nav-count"></span></button>
+      <button data-scope="done" title="Completed tasks"><span class="state-mark done"></span><span class="nav-label">Completed</span><span data-scope-count="done" class="nav-count"></span></button>
+      <button data-scope="blocked" title="Waiting on other tasks"><span class="nav-icon">◷</span><span class="nav-label">Waiting</span><span data-scope-count="blocked" class="nav-count"></span></button>
+      <button data-scope="drafts" title="Unsaved drafts"><span class="nav-icon">✎</span><span class="nav-label">Unsaved drafts</span><span data-scope-count="drafts" class="nav-count"></span></button>
+    </nav>
+    <div class="sidebar-bottom"><button id="show-shortcuts" class="quiet-button"><span class="nav-icon">⌘</span><span class="nav-label">Keyboard shortcuts</span></button><span id="connection" class="connection">Connecting…</span><details class="workspace-details"><summary>Workspace details</summary><span id="store-path"></span><p>Changes save on this computer. Export a copy to share.</p></details></div>
+  </aside>
   <main>
-    <section class="page-heading">
-      <div><p class="eyebrow">YOUR WORKSPACE</p><h1>Your tasks<span class="title-period">.</span></h1><p class="subtitle">Review tasks, make changes, and export when you're ready.</p></div>
-      <div class="heading-actions"><button id="new-task">+ New task</button><button id="export-button" class="primary" disabled>Export selected <span id="export-count">0</span></button></div>
-    </section>
+    <header class="page-heading"><div class="page-title"><span class="breadcrumb">Workspace</span><span class="breadcrumb-divider">/</span><h1 id="view-title">All tasks</h1><span id="heading-count" class="heading-count"></span></div><div class="heading-actions"><button id="export-button" disabled>Export <span id="export-count">0</span></button><button id="new-task" class="primary">+ New task</button></div></header>
     <div id="connection-error" class="notice error" role="alert" hidden></div>
     <div id="warnings" class="notice" role="status" hidden></div>
     <section class="toolbar" aria-label="Task controls">
-      <div class="view-switch" aria-label="View"><button id="board-view" aria-pressed="true"><span class="board-symbol" aria-hidden="true"></span>Board</button><button id="list-view" aria-pressed="false"><span class="list-symbol" aria-hidden="true"></span>List</button></div>
-      <input id="search" type="search" aria-label="Search tasks" placeholder="Search tasks…">
+      <div class="view-switch" aria-label="View"><button id="list-view" aria-pressed="true"><span class="list-symbol" aria-hidden="true"></span>List</button><button id="board-view" aria-pressed="false"><span class="board-symbol" aria-hidden="true"></span>Board</button></div>
+      <label class="search-box"><svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"></circle><path d="m13 13 4 4"></path></svg><input id="search" type="search" aria-label="Search tasks" placeholder="Search tasks"><kbd>/</kbd></label>
+      <button id="filter-toggle" aria-expanded="false" aria-controls="filters"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M3 5h14M6 10h8M8 15h4"></path></svg>Filters <span id="filter-count"></span></button>
+      <div class="display-controls"><select id="group-by" aria-label="Group tasks"><option value="state">Group: Status</option><option value="none">No grouping</option></select><select id="sort-order" aria-label="Sort tasks"><option value="number">Order: Task number</option><option value="priority">Priority</option><option value="newest">Newest first</option><option value="title">Title</option></select></div>
+    </section>
+    <section id="filters" class="filter-panel" aria-label="Filters" hidden>
       <select id="status-filter" aria-label="Filter by status"><option value="">All statuses</option><option value="todo">To do</option><option value="doing">In progress</option><option value="done">Done</option><option value="cancelled">Cancelled</option><option value="blocked">Waiting on tasks</option></select>
       <select id="priority-filter" aria-label="Filter by priority"><option value="">All priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="med">Medium</option><option value="low">Low</option><option value="none">No priority</option></select>
       <select id="label-filter" aria-label="Filter by tag"><option value="">All tags</option></select>
       <select id="export-filter" aria-label="Filter by export status"><option value="">Any export status</option><option value="new">Not exported</option><option value="exported">Exported</option><option value="changed">Changed since export</option></select>
       <div id="field-filters" class="field-filters"></div>
       <label class="cancelled-toggle"><input id="show-cancelled" type="checkbox"> Show cancelled</label>
+      <button id="reset-filters" class="quiet-button">Reset filters</button>
     </section>
-    <div class="selection-bar"><label><input id="select-visible" type="checkbox"> <span id="selection-label">Select visible</span></label><button id="clear-selection" class="text-button" hidden>Clear selection</button><span id="task-count">Loading tasks…</span><span id="draft-count"></span></div>
-    <div class="workspace" id="workspace"><section id="tasks" aria-label="Tasks"><div class="empty"><p>Opening your workspace…</p></div></section><aside id="editor" aria-label="Task editor" hidden></aside></div>
-    <footer><details><summary>Workspace details</summary><span id="store-path"></span></details><span>Save changes here. Export a copy when you're ready to share.</span></footer>
+    <div class="selection-bar"><label><input id="select-visible" type="checkbox" aria-label="Select all visible tasks"> <span id="selection-label">Select all</span></label><button id="clear-selection" class="quiet-button" aria-label="Clear selection" title="Clear selection · Esc" hidden>×</button><span id="task-count">Loading tasks…</span><span id="draft-count"></span><span class="selection-hint">Shift-click to select a range</span>
+      <section id="bulk-bar" class="bulk-bar" aria-label="Edit selected tasks" hidden><label class="sr-only" for="bulk-field">Property to change</label><select id="bulk-field"><optgroup label="Set"><option value="state">Status</option><option value="priority">Priority</option><option value="assignee">Owner</option><option value="add-tags">Add tags</option><option value="remove-tags">Remove tags</option></optgroup><optgroup label="Remove"><option value="unassign">Unassign owner</option></optgroup></select><div id="bulk-value-control"><select id="bulk-value" aria-label="New status"><option value="">Choose status…</option><option value="todo">To do</option><option value="doing">In progress</option><option value="done">Done</option><option value="cancelled">Cancelled</option></select></div><button id="bulk-apply" class="primary">Apply to selected</button><span id="bulk-note"></span><span id="bulk-progress" role="status"></span></section>
+    </div>
+    <section id="bulk-result" class="bulk-result" aria-label="Bulk edit result" role="status" hidden></section>
+    <div class="workspace" id="workspace"><section id="tasks" aria-label="Tasks" tabindex="-1"><div class="empty"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><p>Opening your workspace…</p></div></section><aside id="editor" aria-label="Task editor" hidden></aside></div>
   </main>
+  </div>
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="media-dialog" aria-labelledby="media-viewer-title">
     <div class="dialog-heading"><h2 id="media-viewer-title">Screenshot</h2><button id="close-media" aria-label="Close screenshot viewer">Close</button></div>
     <div id="media-viewer-content"></div>
   </dialog>
+  <dialog id="shortcuts-dialog" aria-labelledby="shortcuts-title"><div class="dialog-heading"><h2 id="shortcuts-title">Keyboard shortcuts</h2><button id="close-shortcuts" aria-label="Close keyboard shortcuts">Close</button></div><dl class="shortcut-list"><dt>Search tasks</dt><dd><kbd>/</kbd></dd><dt>Create a task</dt><dd><kbd>C</kbd></dd><dt>Previous / next task</dt><dd><kbd>Alt</kbd> + <kbd>← / →</kbd></dd><dt>Save this task</dt><dd><kbd>⌘ / Ctrl</kbd> + <kbd>Enter</kbd></dd><dt>Select all visible tasks</dt><dd><kbd>⌘ / Ctrl</kbd> + <kbd>A</kbd> in the list</dd><dt>Select a range</dt><dd><kbd>Shift</kbd> + click a checkbox</dd><dt>Close task / clear selection</dt><dd><kbd>Esc</kbd></dd></dl></dialog>
   <dialog id="export-dialog" aria-labelledby="export-title">
     <div class="dialog-heading"><div><p class="eyebrow">HANDOFF</p><h2 id="export-title">Review your export</h2></div><button id="close-export" aria-label="Close export">Close</button></div>
     <p class="subtitle">Notion-ready CSV · Review the rows, then save a file to import.</p>

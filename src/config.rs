@@ -11,6 +11,10 @@
 //! display_name = "Client"
 //! ```
 //!
+//! It may also declare a **format** (ADR-012): a guide for whoever writes
+//! tasks, a description template, and the fields and sections every task
+//! should have — see [`crate::format::EXAMPLE`].
+//!
 //! Only the CLI reads this file — it's etiquette, not physics: the fold accepts
 //! whatever the ledger says, so editing the config never changes a task.
 
@@ -47,7 +51,11 @@ pub const EXPORT_COLUMNS_AFTER: [&str; 5] = [
 ];
 
 /// The top-level settings this version reads; any other is ignored, with a warning.
-const KNOWN_SETTINGS: [&str; 2] = ["fields", "media"];
+const KNOWN_SETTINGS: [&str; 3] = ["fields", "format", "media"];
+
+/// The settings `[format]` reads; any other is ignored, with a warning — a
+/// later version may add some (ADR-012).
+const FORMAT_SETTINGS: [&str; 4] = ["guide", "template", "required_fields", "required_sections"];
 
 /// Default cap for one image or GIF, in MiB (ADR-008).
 pub const DEFAULT_MAX_IMAGE_MIB: u64 = 8;
@@ -81,8 +89,23 @@ pub struct Config {
     pub fields: Vec<Field>,
     /// Caps for files copied into `media/` (ADR-008). Defaults when unset.
     pub media: MediaLimits,
-    /// Top-level settings this version doesn't know, one message each.
+    /// What a task should look like here (ADR-012). Empty when undeclared.
+    pub format: Format,
+    /// Settings this version doesn't know, one message each.
     pub warnings: Vec<String>,
+}
+
+/// `[format]`: the team's conventions for writing tasks (ADR-012).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Format {
+    /// Prose for whoever writes tasks.
+    pub guide: Option<String>,
+    /// The description to start from (markdown).
+    pub template: Option<String>,
+    /// Declared fields every open task should carry.
+    pub required_fields: Vec<String>,
+    /// Headings every open task's description should have text under.
+    pub required_sections: Vec<String>,
 }
 
 /// One declared field.
@@ -113,6 +136,22 @@ struct RawConfig {
     fields: BTreeMap<String, RawField>,
     #[serde(default)]
     media: RawMedia,
+    #[serde(default)]
+    format: RawFormat,
+    #[serde(flatten)]
+    other: BTreeMap<String, toml::Value>,
+}
+
+/// `[format]` as written. Unknown keys land in `other`, to be warned about:
+/// unlike a field's table, later versions are expected to add settings here.
+#[derive(Deserialize, Default)]
+struct RawFormat {
+    guide: Option<String>,
+    template: Option<String>,
+    #[serde(default)]
+    required_fields: Vec<String>,
+    #[serde(default)]
+    required_sections: Vec<String>,
     #[serde(flatten)]
     other: BTreeMap<String, toml::Value>,
 }
@@ -165,26 +204,21 @@ impl Config {
             .and_then(|fields| unique_headings(&fields).map(|()| fields))
             .map_err(|why| Error::Usage(format!("{}: {why}", path.display())))?;
         let media = media_limits(&path, &raw.media)?;
-        let known: Vec<String> = KNOWN_SETTINGS.iter().map(|s| s.to_string()).collect();
-        let warnings = raw
-            .other
-            .keys()
-            .map(|setting| {
-                let hint = closest(setting, &known)
-                    .map(|k| format!(" — did you mean `{k}`?"))
-                    .unwrap_or_default();
-                format!(
-                    "{}: ignored `{setting}`, a setting hippo-task {} doesn't know{hint} (a newer hippo-task may use it)",
-                    path.display(),
-                    env!("CARGO_PKG_VERSION")
-                )
-            })
-            .collect();
+        let format = format(&raw.format, &fields)
+            .map_err(|why| Error::Usage(format!("{}: [format] {why}", path.display())))?;
+        let mut warnings = unknown(&path, "", raw.other.keys(), &KNOWN_SETTINGS);
+        warnings.extend(unknown(
+            &path,
+            "[format] ",
+            raw.format.other.keys(),
+            &FORMAT_SETTINGS,
+        ));
         Ok(Config {
             path,
             exists: true,
             fields,
             media,
+            format,
             warnings,
         })
     }
@@ -252,6 +286,86 @@ impl Config {
             self.path.display()
         )))
     }
+}
+
+/// One warning per setting this version doesn't know, suggesting the closest
+/// one it does. `section` prefixes the name, e.g. `[format] `.
+fn unknown<'a>(
+    path: &Path,
+    section: &str,
+    settings: impl Iterator<Item = &'a String>,
+    known: &[&str],
+) -> Vec<String> {
+    let known: Vec<String> = known.iter().map(|s| s.to_string()).collect();
+    settings
+        .map(|setting| {
+            let hint = closest(setting, &known)
+                .map(|k| format!(" — did you mean `{k}`?"))
+                .unwrap_or_default();
+            format!(
+                "{}: ignored {section}`{setting}`, a setting hippo-task {} doesn't know{hint} (a newer hippo-task may use it)",
+                path.display(),
+                env!("CARGO_PKG_VERSION")
+            )
+        })
+        .collect()
+}
+
+/// Validate `[format]` (ADR-012): required fields must be declared, and when
+/// there's a template, every required section must be one of its headings —
+/// so the template and the rule can't disagree.
+fn format(raw: &RawFormat, fields: &[Field]) -> std::result::Result<Format, String> {
+    let text = |name: &str, value: &Option<String>| match value {
+        Some(v) if v.trim().is_empty() => Err(format!("`{name}` can't be empty")),
+        _ => Ok(value.clone()),
+    };
+    let guide = text("guide", &raw.guide)?;
+    let template = text("template", &raw.template)?;
+    let required_fields = names("required_fields", &raw.required_fields)?;
+    let declared: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+    for name in &required_fields {
+        if !declared.contains(name) {
+            let hint = closest(name, &declared)
+                .map(|n| format!(" — did you mean `{n}`?"))
+                .unwrap_or_else(|| format!(" — declare it first, under [fields.{name}]"));
+            return Err(format!(
+                "required_fields names `{name}`, which isn't a declared field{hint}"
+            ));
+        }
+    }
+    let required_sections = names("required_sections", &raw.required_sections)?;
+    if let Some(template) = &template {
+        let headings = crate::format::headings(template);
+        for name in &required_sections {
+            if !headings.contains(&crate::format::heading_key(name)) {
+                return Err(format!(
+                    "required section `{name}` isn't a heading in the template — add `## {name}` to it, or drop it from required_sections"
+                ));
+            }
+        }
+    }
+    Ok(Format {
+        guide,
+        template,
+        required_fields,
+        required_sections,
+    })
+}
+
+/// A list of names, trimmed: none empty, none twice.
+fn names(setting: &str, list: &[String]) -> std::result::Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::with_capacity(list.len());
+    for name in list {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return Err(format!("{setting} can't list an empty name"));
+        }
+        if out.contains(&name) {
+            return Err(format!("{setting} lists `{name}` twice"));
+        }
+        out.push(name);
+    }
+    Ok(out)
 }
 
 /// `[media]` caps. A missing key keeps the default; zero is refused.

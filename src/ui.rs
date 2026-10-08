@@ -6,7 +6,7 @@ mod markdown;
 use crate::error::{Error, Result};
 use crate::model::{Priority, State};
 use crate::ops::{self, Changes, Ctx, Destination, ExportSelection, Filter, NewTask};
-use crate::render::{DetailView, ErrorView, ExportView, FieldsView, TaskView};
+use crate::render::{DetailView, ErrorView, ExportView, FieldsView, FormatView, TaskView};
 use crate::store::Store;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -223,6 +223,7 @@ impl App {
             return Ok(json!({
                 "tasks": tasks.iter().map(|t| TaskView::new(t, now, self.store.folder())).collect::<Vec<_>>(),
                 "fields": FieldsView::new(&fields),
+                "format": FormatView::new(&fields.config),
                 "store": self.store.folder(), "actor": ctx.actor,
                 "changed": changed.iter().map(|t| &t.id).collect::<Vec<_>>(),
                 "media_limits": {"max_image_bytes":limits.max_image_bytes,"max_video_bytes":limits.max_video_bytes}

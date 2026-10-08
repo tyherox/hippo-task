@@ -530,3 +530,27 @@ fn ui_upload_never_follows_store_media_symlinks_or_overwrites_damaged_files() {
     assert_eq!(std::fs::read(&dest).unwrap(), b"damaged");
     assert_eq!(std::fs::read_dir(&media).unwrap().count(), 1);
 }
+
+#[test]
+fn ui_state_carries_the_task_format_and_a_save_reports_its_gaps() {
+    let dir = TempDir::new("ui-format");
+    ok(dir.path(), HUMAN, &["add", "Existing"]);
+    std::fs::write(
+        dir.path().join(".hippotask").join("config.toml"),
+        "[format]\ntemplate = \"## Done when\\n- [ ]\\n\"\nrequired_sections = [\"Done when\"]\n",
+    )
+    .unwrap();
+    let ui = Ui::start(&dir);
+    let (_, state) = ui.api("GET", "/api/state", None);
+    assert_eq!(state["format"]["template"], "## Done when\n- [ ]\n");
+    assert_eq!(state["format"]["required_sections"], json!(["Done when"]));
+    let (code, saved) = ui.api(
+        "POST",
+        "/api/tasks",
+        Some(json!({"title":"From the template","body":"## Done when\n- [ ]\n"})),
+    );
+    assert_eq!(code, 200, "{saved}");
+    assert_eq!(saved["title"], "From the template");
+    let warnings = saved["warnings"].to_string();
+    assert!(warnings.contains("Done when"), "{saved}");
+}

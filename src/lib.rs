@@ -17,16 +17,23 @@
 //!    and the caps for description media (ADR-008).
 //! 9. [`media`] — description markdown: image links, content-addressed files,
 //!    and the paragraph merge `desc --base` uses (ADR-008).
+//! 10. [`format`] — a team's task conventions, checked after writes (ADR-012).
+//! 11. [`similar`] — ranking tasks by the words they share with a text (ADR-013).
+//!
+//! 12. [`hook`] — Claude Code session hooks: an identity per session (ADR-014).
 //!
 //! `src/main.rs` is only argument parsing and printing.
 
 pub mod config;
 pub mod error;
 pub mod fold;
+pub mod format;
+pub mod hook;
 pub mod media;
 pub mod model;
 pub mod ops;
 pub mod render;
 pub mod setup;
+pub mod similar;
 pub mod store;
 pub mod ui;

@@ -3,8 +3,9 @@
 #
 # Tests are this project's main guardrail, so they may be *strengthened* freely
 # but not silently *weakened*. Compared with a base revision, this fails on:
-#   - removed assertions   (assert!, assert_eq!, assert_ne!, debug_assert…)
-#   - newly ignored tests  (#[ignore])
+#   - removed assertions   (Rust: assert!, assert_eq!, assert_ne!, debug_assert…;
+#                           UI: assert(…), assert.equal(…), assert.match(…)…)
+#   - newly ignored tests  (Rust: #[ignore]; UI: test.skip(…), test.todo(…), {skip: …})
 # Override for a deliberate change: put "test-weaken-ok: <reason>" in the diff
 # and get it reviewed.
 #
@@ -22,8 +23,9 @@ if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
   echo "test-integrity: base '$base' not found (first push?) — skipping"; exit 0
 fi
 
-# Unit tests live next to the code in src/, integration tests in tests/.
-diff="$(git diff "$base" -- tests/ src/ 2>/dev/null || true)"
+# Unit tests live next to the code in src/, integration tests in tests/, and
+# the browser UI's behavior tests in ui/*.test.cjs.
+diff="$(git diff "$base" -- tests/ src/ 'ui/*.test.cjs' 2>/dev/null || true)"
 if [ -z "$diff" ]; then
   echo "✅ test-integrity: no test changes (vs $base)"; exit 0
 fi
@@ -34,8 +36,8 @@ fi
 
 # Ignore comment lines (prose that merely mentions "assert" or "ignore").
 strip_comments='^[+-][[:space:]]*//'
-removed_assertions="$(printf '%s\n' "$diff" | grep -E '^-[^-].*(assert(_eq|_ne)?!|debug_assert)' | grep -vE "$strip_comments" || true)"
-added_ignores="$(printf '%s\n' "$diff" | grep -E '^\+.*#\[ignore' | grep -vE "$strip_comments" || true)"
+removed_assertions="$(printf '%s\n' "$diff" | grep -E '^-[^-].*(assert(_eq|_ne)?!|debug_assert|assert(\.[A-Za-z]+)?\()' | grep -vE "$strip_comments" || true)"
+added_ignores="$(printf '%s\n' "$diff" | grep -E '^\+(.*#\[ignore|(.*[^A-Za-z_.])?(test|it|describe)\.(skip|todo)\(|.*[{,][[:space:]]*(skip|todo)[[:space:]]*:)' | grep -vE "$strip_comments" || true)"
 
 if [ -n "$removed_assertions" ] || [ -n "$added_ignores" ]; then
   echo "❌ test-integrity: weakening detected (fails verify)"
