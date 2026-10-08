@@ -23,9 +23,71 @@ required_fields = ["project"]     # declared under [fields.project]
 required_sections = ["Done when"]
 "#;
 
-/// What a task misses, one message per gap, each naming the fix. Closed
-/// tasks miss nothing: they're history, not work to shape.
-pub fn gaps(config: &Config, task: &Task) -> Vec<String> {
+/// One thing a task misses from the project's format.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Gap {
+    /// A required field the task doesn't carry. `label` is its display name.
+    Field {
+        name: String,
+        label: String,
+        allowed: Option<Vec<String>>,
+    },
+    /// A required heading with nothing under it — or no such heading at all.
+    Section { name: String },
+}
+
+impl Gap {
+    /// `field` or `section`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Gap::Field { .. } => "field",
+            Gap::Section { .. } => "section",
+        }
+    }
+
+    /// The field's name, or the section's heading, as the config spells it.
+    pub fn name(&self) -> &str {
+        match self {
+            Gap::Field { name, .. } | Gap::Section { name } => name,
+        }
+    }
+
+    /// What people call it: the field's display name, or the heading.
+    pub fn label(&self) -> &str {
+        match self {
+            Gap::Field { label, .. } => label,
+            Gap::Section { name } => name,
+        }
+    }
+
+    /// The warning the CLI prints: the gap, then the command that fills it.
+    pub fn message(&self, task: &Task) -> String {
+        match self {
+            Gap::Field { name, allowed, .. } => {
+                let allowed = allowed
+                    .as_ref()
+                    .map(|values| format!(" (one of: {})", values.join(", ")))
+                    .unwrap_or_default();
+                format!(
+                    "{} has no {name}, which this project's task format requires — set it: hippo-task update {} --field {name}=<value>{allowed}",
+                    task.handle(),
+                    task.num
+                )
+            }
+            Gap::Section { name } => format!(
+                "{} has nothing under a \"{name}\" heading, which this project's task format requires (see `hippo-task format`) — fill it in: hippo-task desc {} --base {} --file <markdown>",
+                task.handle(),
+                task.num,
+                task.seq
+            ),
+        }
+    }
+}
+
+/// What a task misses from the project's format, in the config's order:
+/// fields first, then sections. Closed tasks miss nothing — they're history,
+/// not work to shape.
+pub fn gaps(config: &Config, task: &Task) -> Vec<Gap> {
     if task.state.is_closed() {
         return Vec::new();
     }
@@ -35,29 +97,19 @@ pub fn gaps(config: &Config, task: &Task) -> Vec<String> {
         if task.fields.contains_key(name) {
             continue;
         }
-        let allowed = config
-            .field(name)
-            .and_then(|f| f.values.as_ref())
-            .map(|values| format!(" (one of: {})", values.join(", ")))
-            .unwrap_or_default();
-        gaps.push(format!(
-            "{} has no {name}, which this project's task format requires — set it: hippo-task update {} --field {name}=<value>{allowed}",
-            task.handle(),
-            task.num
-        ));
+        let field = config.field(name);
+        gaps.push(Gap::Field {
+            name: name.clone(),
+            label: field.map_or_else(|| name.clone(), |f| f.display_name.clone()),
+            allowed: field.and_then(|f| f.values.clone()),
+        });
     }
     let sections = sections(task.body.as_deref().unwrap_or(""));
     for name in &format.required_sections {
         let key = heading_key(name);
-        if sections.iter().any(|s| s.key == key && s.filled) {
-            continue;
+        if !sections.iter().any(|s| s.key == key && s.filled) {
+            gaps.push(Gap::Section { name: name.clone() });
         }
-        gaps.push(format!(
-            "{} has nothing under a \"{name}\" heading, which this project's task format requires (see `hippo-task format`) — fill it in: hippo-task desc {} --base {} --file <markdown>",
-            task.handle(),
-            task.num,
-            task.seq
-        ));
     }
     gaps
 }

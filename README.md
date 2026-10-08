@@ -6,7 +6,7 @@
 
 It's the reference implementation of the open agent-native task schema (`docs/schema-design.md`).
 
-**Status: 0.7.0 — development** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
+**Status: 0.7.0 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
 
 *History:* HippoTask started as a TypeScript prototype of a universal interop schema with platform adapters — preserved at git tag `v0-typescript`, with its research (the 10-platform schema study, provider scorecards) in `docs/archive/typescript-v0/`. This Rust core narrows the first release to local, multi-agent task memory; platform adapters come back once sync is earned.
 
@@ -18,7 +18,7 @@ It's the reference implementation of the open agent-native task schema (`docs/sc
 curl -fsSL https://raw.githubusercontent.com/tyherox/hippo-task/main/scripts/install.sh | sh
 ```
 
-It downloads the latest release for your machine, checks its SHA-256, and puts `hippo-task` in `~/.local/bin` — or next to the copy already on your PATH. Run it again to upgrade; `… | HIPPO_VERSION=v0.4.1 sh` installs a specific release.
+It downloads the latest release for your machine, checks its SHA-256, and puts `hippo-task` in `~/.local/bin` — or next to the copy already on your PATH. Run it again to upgrade; `… | HIPPO_VERSION=v0.4.1 sh` installs a specific release. After upgrading, re-run `hippo-task skill --to …` wherever you installed the agent skill, so agents read the new version's protocol.
 
 **Windows:** download `hippo-task-x86_64-pc-windows-msvc.zip` from the [latest release](https://github.com/tyherox/hippo-task/releases/latest), unzip it, and put `hippo-task.exe` in a folder on your PATH.
 

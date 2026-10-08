@@ -25,6 +25,9 @@ let descriptionRequest = null, descriptionMediaUrls = [], descriptionTimer;
 // The project's task conventions (ADR-012): a template for new descriptions,
 // and fields every task should carry.
 let taskFormat = {guide:null, template:null, required_fields:[], required_sections:[]};
+// What each saved task still misses from that format, by task id: the
+// server's `format_gaps`, shown in the editor in plain words.
+const formatGaps = new Map();
 let mediaPicker = null, mediaLimits = {max_image_bytes:8 * 1024 * 1024,max_video_bytes:64 * 1024 * 1024};
 
 async function api(path, method = "GET", body, signal) {
@@ -38,7 +41,7 @@ async function api(path, method = "GET", body, signal) {
     throw error;
   }
   const result = await response.json();
-  showWarnings(result.warnings || []);
+  showWarnings(visibleWarnings(result));
   if (!response.ok) {
     const error = new Error(result.message || "The request failed.");
     error.kind = result.error;
@@ -51,6 +54,18 @@ async function api(path, method = "GET", body, signal) {
 async function write(path, method, body) {
   try { return await api(path, method, body); }
   finally { writes++; }
+}
+
+// A response's warnings, minus the format gaps it also reports: those show
+// in the task's editor, in words people use, not as CLI commands.
+function visibleWarnings(result) {
+  const gaps = new Set((result.format_gaps || []).map((gap) => gap.message));
+  return (result.warnings || []).filter((warning) => !gaps.has(warning));
+}
+function gapText(gap) { return gap.kind === "section" ? `text under “${gap.label}”` : gap.label; }
+function gapsNotice(id) {
+  const gaps = formatGaps.get(id) || [];
+  return gaps.length ? `<div class="notice format-gaps" role="status">This project's task format also asks for: ${escapeHtml(gaps.map(gapText).join(" · "))}</div>` : "";
 }
 
 function showWarnings(warnings) {
@@ -524,6 +539,7 @@ function renderEditor() {
     <div class="editor-heading"><h2 tabindex="-1" id="editor-heading">${active === "new" ? "New task" : `Task ${task.num}`}</h2><div id="task-navigation" class="task-navigation" aria-label="Review navigation"></div><button data-action="close-editor" aria-label="Close task editor" title="Close · Esc">×</button></div>
     <div class="editor-body"><fieldset class="task-form" ${d.saving || bulkTargets.has(active) ? "disabled" : ""}>
       ${d.error ? `<div class="notice error" role="alert">${escapeHtml(d.error)}</div>` : ""}
+      ${gapsNotice(active)}
       ${d.latest && dirty(active) ? `<div class="notice">Someone updated this task. Your changes are still here.<details open><summary>Compare with the saved task</summary><dl class="comparison"><dt>Title</dt><dd>${escapeHtml(d.latest.title)}</dd><dt>Status / Priority</dt><dd>${statuses[d.latest.state]} / ${priorities[d.latest.priority]}</dd><dt>Owner / Tags</dt><dd>${escapeHtml(d.latest.assignee || "Unassigned")} / ${escapeHtml(d.latest.labels.join(", ") || "None")}</dd>${fields.map((f) => `<dt>${escapeHtml(f.display_name)}</dt><dd>${escapeHtml(d.latest.fields[f.field] || "Not set")}</dd>`).join("")}<dt>Description</dt><dd>${escapeHtml(d.latest.body || "No description")}</dd></dl></details><button data-action="rebase" ${d.upload ? "disabled" : ""}>Keep my edits and review</button></div>` : ""}
       <label class="form-field title-field"><span class="sr-only">Task title</span><textarea rows="1" data-input="title" id="editor-title" placeholder="What needs doing?" ${d.saving ? "disabled" : ""}>${value("title")}</textarea></label>
       <div class="property-row"><label class="form-field"><span>Status</span><select data-input="state" ${held(task) || active === "new" || d.saving ? "disabled" : ""}>${options(statuses,d.values.state)}</select></label><label class="form-field"><span>Priority</span><select data-input="priority" ${d.saving ? "disabled" : ""}>${options(priorities,d.values.priority)}</select></label><label class="form-field"><span>Owner</span><input data-input="assignee" value="${value("assignee")}" placeholder="Unassigned"></label></div>
@@ -827,6 +843,7 @@ async function saveDraft(id) {
   try {
     const payload = id === "new" ? {title:d.values.title,priority:d.values.priority,body:d.values.body.trim() ? d.values.body : null,assignee:d.values.assignee.trim() || null,labels:tags(d.values.labels),fields:Object.fromEntries(Object.entries(d.values.fields).filter(([,v]) => v.trim()))} : patchFor(d);
     const saved = await write(id === "new" ? "/api/tasks" : `/api/task/${id}`,id === "new" ? "POST" : "PATCH",payload);
+    formatGaps.set(saved.id, saved.format_gaps || []);
     const index = tasks.findIndex((task) => task.id === saved.id);
     if (index < 0) tasks.push(saved); else tasks[index] = saved;
     drafts.delete(id);

@@ -424,3 +424,18 @@ test('required fields the draft leaves unset are named',()=>{
   assert.equal(a.run('isRequired(fields[0])'),true);
   assert.equal(a.run('isRequired(fields[1])'),false);
 });
+
+test('format gaps stay out of the warning banner and read as plain words',()=>{
+  const a=app();
+  a.run(`var result={warnings:["CLI text for project","CLI text for done when","the ledger has a torn line"],
+    format_gaps:[{kind:"field",name:"project",label:"Project",message:"CLI text for project"},
+                 {kind:"section",name:"Done when",label:"Done when",message:"CLI text for done when"}]};`);
+  assert.equal(a.run('JSON.stringify(visibleWarnings(result))'),'["the ledger has a torn line"]','other warnings still show');
+  assert.equal(a.run('JSON.stringify(visibleWarnings({warnings:["x"]}))'),'["x"]','no gaps: nothing hidden');
+  assert.equal(a.run('gapText(result.format_gaps[0])'),'Project');
+  assert.equal(a.run('gapText(result.format_gaps[1])'),'text under “Done when”');
+  a.run('formatGaps.set("1", result.format_gaps)');
+  assert.match(a.run('gapsNotice("1")'),/Project · text under “Done when”/);
+  assert.doesNotMatch(a.run('gapsNotice("1")'),/hippo-task/,'no CLI commands for people');
+  assert.equal(a.run('gapsNotice("2")'),'','a task without gaps shows nothing');
+});

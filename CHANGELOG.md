@@ -2,7 +2,18 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
-## [0.7.0] - Unreleased
+## [Unreleased]
+
+### Changed
+
+- The review UI shows what a saved task still misses from the project's
+  format in its editor, in plain words ("This project's task format also asks
+  for: Project · text under “Done when”"), instead of CLI commands in the
+  warning banner. Save responses gain `format_gaps`; `warnings` are unchanged.
+- README: after upgrading, re-run `hippo-task skill --to …` where the skill is
+  installed, so agents read the new version's protocol.
+
+## [0.7.0] - 2026-10-08 — internal release
 
 ### Added
 

@@ -554,3 +554,68 @@ fn ui_state_carries_the_task_format_and_a_save_reports_its_gaps() {
     let warnings = saved["warnings"].to_string();
     assert!(warnings.contains("Done when"), "{saved}");
 }
+
+#[test]
+fn a_save_reports_format_gaps_in_plain_words_for_the_editor() {
+    let dir = TempDir::new("ui-format-gaps");
+    ok(dir.path(), HUMAN, &["add", "Existing"]);
+    std::fs::write(
+        dir.path().join(".hippotask").join("config.toml"),
+        "[fields.project]\nvalues = [\"dashboard\", \"billing\"]\n\n[format]\ntemplate = \"## Done when\\n- [ ]\\n\"\nrequired_fields = [\"project\"]\nrequired_sections = [\"Done when\"]\n",
+    )
+    .unwrap();
+    let ui = Ui::start(&dir);
+    let (code, saved) = ui.api(
+        "POST",
+        "/api/tasks",
+        Some(json!({"title":"From the template","body":"## Done when\n- [ ]\n"})),
+    );
+    assert_eq!(code, 200, "{saved}");
+    let gaps = saved["format_gaps"].as_array().unwrap();
+    let shown: Vec<(&str, &str, &str)> = gaps
+        .iter()
+        .map(|g| {
+            (
+                g["kind"].as_str().unwrap(),
+                g["name"].as_str().unwrap(),
+                g["label"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("field", "project", "Project"),
+            ("section", "Done when", "Done when")
+        ]
+    );
+    // Each gap carries the CLI's text too, so the UI can keep it out of its
+    // banner: the warnings stay complete for any other client.
+    let warnings: Vec<&str> = saved["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap())
+        .collect();
+    for gap in gaps {
+        let message = gap["message"].as_str().unwrap();
+        assert!(message.contains("hippo-task"), "{message}");
+        assert!(warnings.contains(&message), "{saved}");
+    }
+    // Filled in: nothing left to report.
+    let route = format!("/api/task/{}", saved["id"].as_str().unwrap());
+    let (code, filled) = ui.api(
+        "PATCH",
+        &route,
+        Some(json!({"base": saved["seq"], "body": "## Done when\n- [ ] one refresh per 401", "fields": {"project": "billing"}})),
+    );
+    assert_eq!(code, 200, "{filled}");
+    assert_eq!(filled["format_gaps"], json!([]));
+    // Closed tasks are history: never reported.
+    let (_, closed) = ui.api(
+        "PATCH",
+        &route,
+        Some(json!({"base": filled["seq"], "state": "done", "clear_fields": ["project"]})),
+    );
+    assert_eq!(closed["format_gaps"], json!([]), "{closed}");
+}

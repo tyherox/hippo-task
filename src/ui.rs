@@ -195,6 +195,40 @@ impl App {
         )
     }
 
+    /// A saved task, plus what it still misses from the project's format
+    /// (ADR-012), in words the editor can show: `kind`, `name`, `label`, and
+    /// `message` — the CLI's text, which is also among the warnings, so the
+    /// page can keep it out of its banner. The save already happened, so a
+    /// config that can't be read is a warning (worded as `ops` words it, so
+    /// the page shows it once), never a failed save.
+    fn saved(&self, task: &crate::model::Task, now: i64) -> Value {
+        let mut value = json!(TaskView::new(task, now, self.store.folder()));
+        let gaps: Vec<Value> = match crate::config::Config::load(self.store.folder()) {
+            Ok(config) => crate::format::gaps(&config, task)
+                .iter()
+                .map(|gap| {
+                    json!({
+                        "kind": gap.kind(),
+                        "name": gap.name(),
+                        "label": gap.label(),
+                        "message": gap.message(task),
+                    })
+                })
+                .collect(),
+            Err(e) => {
+                self.store.warn(&format!(
+                    "couldn't check {} against this project's task format: {e}",
+                    task.handle()
+                ));
+                Vec::new()
+            }
+        };
+        if let Some(object) = value.as_object_mut() {
+            object.insert("format_gaps".into(), Value::Array(gaps));
+        }
+        value
+    }
+
     fn api(&self, request: &mut Request, path: &str) -> Result<Value> {
         if request.method() == &Method::Post && path == "/api/media" {
             if header(request, "Content-Type") != Some("application/octet-stream") {
@@ -250,7 +284,7 @@ impl App {
                     ..Changes::default()
                 };
                 let task = ops::update_checked(&self.store, &ctx, id, changes, edit.base)?;
-                return Ok(json!(TaskView::new(&task, now, self.store.folder())));
+                return Ok(self.saved(&task, now));
             }
         }
         if request.method() == &Method::Post && path == "/api/tasks" {
@@ -267,7 +301,7 @@ impl App {
                     fields: new.fields.into_iter().collect(),
                 },
             )?;
-            return Ok(json!(TaskView::new(&task, now, self.store.folder())));
+            return Ok(self.saved(&task, now));
         }
         if request.method() == &Method::Post
             && matches!(path, "/api/export/preview" | "/api/export/save")

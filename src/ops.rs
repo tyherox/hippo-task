@@ -168,7 +168,7 @@ fn warn_format(store: &Store, config: std::result::Result<&Config, &Error>, task
     match config {
         Ok(config) => {
             for gap in format::gaps(config, task) {
-                store.warn(&gap);
+                store.warn(&gap.message(task));
             }
         }
         Err(e) => store.warn(&format!(

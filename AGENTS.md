@@ -104,7 +104,12 @@ using the CLI JSON operations for coordination.
 
 The UI's local HTTP API is an internal interface. Its state includes `tasks`,
 `fields`, `format` (as `format --json` prints it), `store`, `actor`, `changed` (IDs whose exported rows changed), and
-`warnings`. Task/detail responses use the existing task JSON. Export preview
+`warnings`. Task/detail responses use the existing task JSON. A saved task
+(`POST /api/tasks`, `PATCH /api/task/<id>`) also carries `format_gaps`:
+`[{"kind": "field" | "section", "name", "label", "message"}]`, what it still
+misses from the project's format (none for a closed task). Each `message` is
+the CLI's warning text and is also among `warnings`, so the page can show the
+gap in the editor instead of its banner. Export preview
 adds `review` (an opaque fingerprint), `csv`, `exported`, `changed`, and
 `suggested_path`; saving returns the existing export report. Preview appends
 nothing. Conditional edits and export saves report `stale` if review is needed.
