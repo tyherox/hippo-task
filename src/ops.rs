@@ -516,7 +516,57 @@ pub fn start(store: &Store, ctx: &Ctx, id: &str) -> Result<Task> {
         },
     );
     let ledger = tx.commit(vec![attempt, doing])?;
-    task_in(fold::fold(&ledger.events), &task_id).map(|task| present(store, task))
+    let proj = fold::fold(&ledger.events);
+    warn_blocked(store, &proj.tasks, &task_id, Step::Start);
+    task_in(proj, &task_id).map(|task| present(store, task))
+}
+
+/// Which command [`warn_blocked`] speaks for.
+#[derive(Clone, Copy)]
+enum Step {
+    Start,
+    Done,
+}
+
+/// `start` and `done` go ahead on a blocked task — one worker taking a chain
+/// in order is fine, and a dependency that no longer holds shouldn't stop
+/// anyone — but they say so. Real stores showed agents claiming and closing
+/// tasks whose blockers were still open, with nothing telling them.
+fn warn_blocked(store: &Store, tasks: &BTreeMap<String, Task>, id: &str, step: Step) {
+    let Some(task) = tasks.get(id) else { return };
+    let mut open: Vec<&Task> = task
+        .relations
+        .iter()
+        .filter(|r| r.rel == RelType::BlockedBy && r.task != task.id)
+        .filter_map(|r| tasks.get(&r.task))
+        .filter(|b| !b.state.is_closed())
+        .collect();
+    if open.is_empty() {
+        return;
+    }
+    open.sort_by_key(|b| b.num);
+    open.dedup_by_key(|b| b.num);
+    let names = open
+        .iter()
+        .map(|b| format!("{} \"{}\" ({})", b.handle(), b.title, b.state))
+        .collect::<Vec<_>>()
+        .join(", ");
+    store.warn(&match step {
+        Step::Start => format!(
+            "{} is yours, but it's blocked by {names}, meant to finish first — unless you're doing that too, release {} and pick from hippo-task list --ready",
+            task.handle(),
+            task.num
+        ),
+        Step::Done => format!(
+            "{} is done, but it was blocked by {names}, still open — if it no longer needed to come first, drop the link: hippo-task update {} {}",
+            task.handle(),
+            task.num,
+            open.iter()
+                .map(|b| format!("--unblock {}", b.num))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+    });
 }
 
 /// What [`release`] did.
@@ -688,7 +738,11 @@ pub fn done(store: &Store, ctx: &Ctx, id: &str, force: bool) -> Result<Task> {
     guard_holder(&task, ctx, force, "close it")?;
     let event = ctx.event(&mut tx, &task.id, EventKind::Complete);
     let ledger = tx.commit(vec![event])?;
-    task_in(fold::fold(&ledger.events), &task.id).map(|task| present(store, task))
+    let proj = fold::fold(&ledger.events);
+    if !task.state.is_closed() {
+        warn_blocked(store, &proj.tasks, &task.id, Step::Done);
+    }
+    task_in(proj, &task.id).map(|task| present(store, task))
 }
 
 /// Append a note to the task's history.

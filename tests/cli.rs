@@ -681,6 +681,76 @@ fn list_ready_is_the_pick_query_and_release_hands_work_back() {
     assert_eq!(ready(CODEX), [1, 2], "released work is ready again");
 }
 
+/// The text of each `{"warning": …}` line on stderr.
+fn warnings(run: &Run) -> Vec<String> {
+    run.stderr
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter_map(|v| v["warning"].as_str().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn start_and_done_warn_about_an_open_blocker_but_still_go_ahead() {
+    // Real stores: agents claimed and closed tasks whose blockers were still
+    // open, and nothing told them. A warning, not a refusal — one worker
+    // working a chain in order is fine, and a stale dependency shouldn't
+    // stop anyone.
+    let dir = TempDir::new("cli-blocked-warn");
+    let d = dir.path();
+    ok(d, HUMAN, &["add", "Write the parser"]);
+    ok(d, HUMAN, &["add", "Ship the CLI"]);
+    ok(d, HUMAN, &["update", "2", "--block", "1"]);
+
+    let started = ok(d, CLAUDE, &["start", "2", "--json"]);
+    assert_eq!(
+        started.json()["state"],
+        "doing",
+        "the claim is still granted"
+    );
+    let said = warnings(&started);
+    assert_eq!(said.len(), 1, "{started:#?}");
+    assert!(
+        said[0].contains("#1") && said[0].contains("Write the parser"),
+        "names the open blocker: {said:?}"
+    );
+    assert!(
+        said[0].contains("--ready"),
+        "points at the pick query: {said:?}"
+    );
+
+    let done = ok(d, CLAUDE, &["done", "2", "--json"]);
+    assert_eq!(done.json()["state"], "done", "the task still closes");
+    let said = warnings(&done);
+    assert_eq!(said.len(), 1, "{done:#?}");
+    assert!(said[0].contains("#1"), "{said:?}");
+    assert!(
+        said[0].contains("update 2 --unblock 1"),
+        "says how to drop a dependency that no longer holds: {said:?}"
+    );
+}
+
+#[test]
+fn no_blocked_warning_once_the_blocker_is_closed() {
+    let dir = TempDir::new("cli-blocked-quiet");
+    let d = dir.path();
+    for title in ["a", "b", "c"] {
+        ok(d, HUMAN, &["add", title]);
+    }
+    ok(d, HUMAN, &["update", "2", "--block", "1"]);
+    ok(d, HUMAN, &["update", "3", "--block", "2"]);
+    ok(d, HUMAN, &["done", "1"]);
+    ok(d, HUMAN, &["update", "2", "--state", "cancelled"]);
+
+    for args in [["start", "3", "--json"], ["done", "3", "--json"]] {
+        let run = ok(d, CLAUDE, &args);
+        assert!(
+            warnings(&run).is_empty(),
+            "done and cancelled blockers no longer block: {run:#?}"
+        );
+    }
+}
+
 #[test]
 fn claims_have_no_timer_and_whoever_knows_hands_work_back() {
     // ADR-003, end to end.

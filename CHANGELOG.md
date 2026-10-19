@@ -2,7 +2,7 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
-## [0.7.1] - 2026-10-09 — internal release
+## [0.7.1] - 2026-10-19 — internal release
 
 ### Added
 
@@ -26,6 +26,18 @@ Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://
   warning banner. Save responses gain `format_gaps`; `warnings` are unchanged.
 - README: after upgrading, re-run `hippo-task skill --to …` where the skill is
   installed, so agents read the new version's protocol.
+- `start` and `done` warn when the task's blockers are still open, naming
+  them, and still go ahead (exit 0): `start` says to release it and pick from
+  `list --ready` unless you're doing the blocker too; `done` says how to drop
+  a dependency that no longer holds (`update 2 --unblock 1`). In real stores,
+  agents claimed 47 blocked tasks and closed 8 before their blockers, with
+  nothing telling them.
+- The agent guide (and so the skill) asks for evidence the next reader can
+  open — screenshots and recordings through `desc --file`, other files as
+  paths relative to the project — after a QA run's 1,272 absolute evidence
+  paths all broke when its folder moved. It also keeps `high` and `urgent` for
+  what must go next: in real stores 48–84% of tasks were `high`, so
+  `--sort priority` told agents little.
 
 ## [0.7.0] - 2026-10-08 — internal release
 
