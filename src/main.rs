@@ -6,6 +6,7 @@
 //! document and stderr is JSON lines.
 
 use clap::{Parser, Subcommand};
+use hippo_task::agents::{self, Agent};
 use hippo_task::error::Error;
 use hippo_task::hook;
 use hippo_task::media::Anchor;
@@ -22,10 +23,6 @@ use serde::Serialize;
 use std::io::{self, BufWriter, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
-/// The Claude Code hooks `init` suggests: each session gets its own identity,
-/// and its tasks go back when it ends (ADR-014).
-const SESSION_HOOKS: &str = r#"{ "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "hippo-task hook session-start" } ] } ], "SessionEnd": [ { "hooks": [ { "type": "command", "command": "hippo-task hook session-end" } ] } ] } }"#;
 
 const AFTER_HELP: &str = "\
 Task ids: a number (3), a full ULID, or at least 4 trailing characters of one.
@@ -78,7 +75,8 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         port: u16,
     },
-    /// Choose where this project's tasks live. Asks, unless you pass --here or --folder.
+    /// Choose where this project's tasks live, and set up its agents. Asks,
+    /// unless you pass --here or --folder.
     Init {
         /// Keep the tasks in this project, in .hippotask/.
         #[arg(long, conflicts_with = "folder")]
@@ -89,6 +87,10 @@ enum Cmd {
         /// Inside a git repository, let the tasks be committed (they're kept out by default).
         #[arg(long)]
         keep_in_git: bool,
+        /// Set up these agents too, e.g. claude,codex: each gets the skill and
+        /// session hooks, and AGENTS.md a line pointing at hippo-task.
+        #[arg(long, value_enum, value_delimiter = ',', value_name = "AGENTS")]
+        agents: Vec<AgentName>,
     },
     /// Print the protocol agents follow to coordinate through hippo-task.
     Guide,
@@ -103,12 +105,15 @@ enum Cmd {
         #[arg(long, value_name = "FOLDER")]
         to: PathBuf,
     },
-    /// For Claude Code hooks (reads the hook's JSON on stdin; prints nothing):
+    /// For Claude Code and Codex hooks (reads the hook's JSON on stdin):
     /// `session-start` gives the session its own identity, `session-end` gives
     /// back what it holds.
     Hook {
         #[arg(value_enum)]
         event: HookEvent,
+        /// The agent running the hook.
+        #[arg(long, value_enum, default_value_t = AgentName::Claude)]
+        agent: AgentName,
     },
     /// Create a task.
     Add {
@@ -326,13 +331,30 @@ enum Cmd {
     },
 }
 
-/// The Claude Code hook events `hook` handles (ADR-014).
+/// The session hook events `hook` handles (ADR-014, ADR-015).
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum HookEvent {
-    /// Export HIPPO_ACTOR and HIPPO_NODE for this session, unless already set.
+    /// Give this session its identity, unless the person already set one:
+    /// Claude Code exports it, Codex is told it (one line of context).
     SessionStart,
     /// Give back everything this session holds.
     SessionEnd,
+}
+
+/// The agents `init --agents` sets up and `hook --agent` runs for (ADR-015).
+#[derive(Clone, Copy, PartialEq, clap::ValueEnum)]
+enum AgentName {
+    Claude,
+    Codex,
+}
+
+impl From<AgentName> for Agent {
+    fn from(name: AgentName) -> Agent {
+        match name {
+            AgentName::Claude => Agent::Claude,
+            AgentName::Codex => Agent::Codex,
+        }
+    }
 }
 
 /// Why `run` stopped early. A closed stdout (`hippo-task list | head -1`) is not a
@@ -389,17 +411,20 @@ fn run(cli: Cli) -> Result<(), Failure> {
         Cmd::Guide => return guide_out(&mut out, json),
         Cmd::Skill { to } => return skill_out(&mut out, json, to),
         Cmd::Whoami => return whoami_out(&mut out, json, cli.actor.clone(), cli.node.clone()),
-        Cmd::Hook { event } => {
+        Cmd::Hook { event, agent } => {
             let who = (cli.actor.clone(), cli.node.clone());
-            return hook_out(json, *event, cli.dir.as_deref(), who);
+            let ran = (*event, Agent::from(*agent));
+            return hook_out(&mut out, json, ran, cli.dir.as_deref(), who);
         }
         Cmd::Init {
             here,
             folder,
             keep_in_git,
+            agents,
         } => {
             let asked = (*here, folder.as_deref(), *keep_in_git);
-            return init_out(&mut out, json, cli.dir.as_deref(), asked);
+            let agents: Vec<Agent> = agents.iter().map(|&a| a.into()).collect();
+            return init_out(&mut out, json, cli.dir.as_deref(), asked, agents);
         }
         _ => {}
     }
@@ -841,12 +866,16 @@ fn guide_out(out: &mut impl Write, json: bool) -> Result<(), Failure> {
     Ok(())
 }
 
-/// `hook session-start | session-end`, run by Claude Code (ADR-014). Prints
-/// nothing: a SessionStart hook's output would land in the agent's context.
-/// `who` is the identity the person launched the session with, if any.
+/// `hook session-start | session-end`, run by Claude Code (ADR-014) or Codex
+/// (ADR-015). For Claude Code it prints nothing: a SessionStart hook's output
+/// would land in the agent's context. For Codex that is the point: Codex has
+/// no env file, so `session-start` prints the session's identity, as one plain
+/// line even with `--json`. `who` is the identity the person launched the
+/// session with, if any.
 fn hook_out(
+    out: &mut impl Write,
     json: bool,
-    event: HookEvent,
+    (event, agent): (HookEvent, Agent),
     dir: Option<&Path>,
     who: (Option<String>, Option<String>),
 ) -> Result<(), Failure> {
@@ -857,30 +886,29 @@ fn hook_out(
     let input = hook::parse(&stdin)?;
     let given = |v: Option<String>| v.filter(|v| !v.trim().is_empty());
     let (actor, node) = (given(who.0), given(who.1));
-    match event {
-        HookEvent::SessionStart => {
+    match (event, agent) {
+        (HookEvent::SessionStart, Agent::Claude) => {
             let Some(env_file) = std::env::var_os("CLAUDE_ENV_FILE") else {
                 return Err(Error::Usage(
-                    "hook session-start needs CLAUDE_ENV_FILE, which Claude Code sets for SessionStart hooks — add this command as one in your settings.json".into(),
+                    "hook session-start needs CLAUDE_ENV_FILE, which Claude Code sets for SessionStart hooks — add this command as one in your settings.json (for Codex: add --agent codex)".into(),
                 )
                 .into());
             };
             let lines = hook::exports(&input, actor.is_some(), node.is_some());
             hook::append(Path::new(&env_file), &lines)?;
         }
-        HookEvent::SessionEnd => {
+        (HookEvent::SessionStart, Agent::Codex) => {
+            // Only a project with tasks spends the agent's context on them.
+            if session_store(dir, &input)?.is_none() {
+                return Ok(());
+            }
+            let line = hook::codex_context(&input, actor.as_deref(), node.as_deref());
+            out.write_all(line.as_bytes())?;
+            out.flush()?;
+        }
+        (HookEvent::SessionEnd, _) => {
             // Run in every project, so a project without tasks is no error.
-            let folder = match dir {
-                Some(dir) => Some(store_folder(Some(dir))?),
-                None => {
-                    let start = match input.cwd.clone().filter(|cwd| cwd.is_dir()) {
-                        Some(cwd) => cwd,
-                        None => current_folder()?,
-                    };
-                    setup::find(&start)?
-                }
-            };
-            let Some(folder) = folder else {
+            let Some(folder) = session_store(dir, &input)? else {
                 return Ok(());
             };
             let store = if json {
@@ -889,8 +917,16 @@ fn hook_out(
             } else {
                 Store::in_folder(folder)
             };
-            let actor = actor.unwrap_or_else(|| hook::ACTOR.to_string());
-            let node = node.unwrap_or_else(|| hook::node(&input));
+            let (actor, node) = match agent {
+                Agent::Claude => (
+                    actor.unwrap_or_else(|| hook::ACTOR.to_string()),
+                    node.unwrap_or_else(|| hook::node(&input)),
+                ),
+                Agent::Codex => (
+                    actor.unwrap_or_else(|| hook::CODEX_ACTOR.to_string()),
+                    node.unwrap_or_else(|| hook::codex_node(&input)),
+                ),
+            };
             let ctx = Ctx::new(
                 Some(actor),
                 Some(node),
@@ -900,6 +936,22 @@ fn hook_out(
         }
     }
     Ok(())
+}
+
+/// The store of the project a hook's session works in: `--dir` when given,
+/// else found from the session's folder (or the current one). `None` when that
+/// project has no tasks.
+fn session_store(dir: Option<&Path>, input: &hook::Input) -> Result<Option<PathBuf>, Error> {
+    match dir {
+        Some(dir) => store_folder(Some(dir)).map(Some),
+        None => {
+            let start = match input.cwd.clone().filter(|cwd| cwd.is_dir()) {
+                Some(cwd) => cwd,
+                None => current_folder()?,
+            };
+            setup::find(&start)
+        }
+    }
 }
 
 /// `whoami`: who commands act as (ADR-014 amendment). Needs no store; an
@@ -961,13 +1013,15 @@ fn skill_out(out: &mut impl Write, json: bool, to: &Path) -> Result<(), Failure>
     Ok(())
 }
 
-/// `init`: choose where the project's tasks live, set it up, and tell the
-/// person what to do next. `asked` is (--here, --folder, --keep-in-git).
+/// `init`: choose where the project's tasks live, set it up and its agents,
+/// and tell the person what to do next. `asked` is (--here, --folder,
+/// --keep-in-git); `agents` is --agents.
 fn init_out(
     out: &mut impl Write,
     json: bool,
     dir: Option<&Path>,
     asked: (bool, Option<&Path>, bool),
+    agents: Vec<Agent>,
 ) -> Result<(), Failure> {
     let (here, folder, keep_in_git) = asked;
     // An explicit --dir is the project; otherwise the enclosing repository's root.
@@ -975,6 +1029,8 @@ fn init_out(
         Some(dir) => dir.to_path_buf(),
         None => setup::project_root(&current_folder()?),
     };
+    // Only a person at a terminal is asked; scripts and agents must choose.
+    let interactive = !json && io::stdin().is_terminal();
     let choice = match folder {
         Some(folder) => Choice {
             place: Place::Folder(
@@ -987,8 +1043,13 @@ fn init_out(
             place: Place::Here,
             keep_out_of_git: !keep_in_git,
         },
-        // Only a person at a terminal is asked; scripts and agents must choose.
-        None if !json && io::stdin().is_terminal() => {
+        // Nothing to choose: init never moves a store, and doesn't change how
+        // one is kept in git unasked.
+        None if project.join(setup::DIR).is_dir() => Choice {
+            place: Place::Here,
+            keep_out_of_git: false,
+        },
+        None if interactive => {
             let mut choice = setup::ask(&project, &mut io::stdin().lock(), out)?;
             choice.keep_out_of_git &= !keep_in_git;
             choice
@@ -1000,17 +1061,31 @@ fn init_out(
             .into())
         }
     };
-    let setup = setup::apply(&project, &choice)?;
-    if json {
-        print_json(out, &InitView::new(&setup))?;
+    // As with the place: --here and --folder mean no questions.
+    let agents = if agents.is_empty() && interactive && !here && folder.is_none() {
+        agents::ask(&mut io::stdin().lock(), out)?
     } else {
-        init_text(out, &setup)?;
+        agents
+    };
+    let setup = setup::apply(&project, &choice)?;
+    let wired = agents::set_up(&setup.project, &agents)?;
+    for warning in &wired.warnings {
+        if json {
+            eprintln!("{}", serde_json::json!({ "warning": warning }));
+        } else {
+            eprintln!("warning: {warning}");
+        }
+    }
+    if json {
+        print_json(out, &InitView::new(&setup, &wired))?;
+    } else {
+        init_text(out, &setup, &wired)?;
     }
     out.flush()?;
     Ok(())
 }
 
-fn init_text(out: &mut impl Write, s: &Setup) -> Result<(), Failure> {
+fn init_text(out: &mut impl Write, s: &Setup, wired: &agents::Report) -> Result<(), Failure> {
     if s.created {
         writeln!(
             out,
@@ -1041,36 +1116,89 @@ fn init_text(out: &mut impl Write, s: &Setup) -> Result<(), Failure> {
         )?,
         (None, _) => {}
     }
+    // Paths as written from the project's root, with `/` on every platform.
+    let mut changed: Vec<String> = Vec::new();
+    for c in &wired.agents {
+        let skill = format!("{}/{}", c.agent.skills(), setup::SKILL_NAME);
+        let file = c.agent.hooks_file();
+        let hooks = if c.hooks_added {
+            format!("added its session hooks to {file}")
+        } else if c.hooks_left_alone {
+            format!("left {file} as it was (see the warning)")
+        } else {
+            format!("its session hooks were already in {file}")
+        };
+        writeln!(
+            out,
+            "✓ {}: wrote the skill to {skill}/; {hooks}",
+            c.agent.title()
+        )?;
+        let folder = |path: &str| path.split('/').next().unwrap_or(path).to_string() + "/";
+        changed.push(folder(c.agent.skills()));
+        changed.push(folder(file));
+    }
+    if let Some(i) = &wired.instructions {
+        let name = i.file.file_name().map_or_else(
+            || i.file.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        if i.added {
+            writeln!(
+                out,
+                "✓ {name}: added a line that points agents at hippo-task"
+            )?;
+        } else {
+            writeln!(
+                out,
+                "  {name} already mentions hippo-task, so it was left as it was."
+            )?;
+        }
+        changed.push(name);
+    }
+    changed.dedup();
     writeln!(out)?;
     writeln!(out, "Next:")?;
+    if wired.agents.is_empty() {
+        writeln!(
+            out,
+            "  • Set up Claude Code and Codex: hippo-task init --agents claude,codex"
+        )?;
+        writeln!(
+            out,
+            "    (each gets the skill, plus SessionStart/SessionEnd hooks: every session gets its own identity, and hands back its tasks when it ends)"
+        )?;
+        writeln!(
+            out,
+            "  • Other agents: put the skill in their skills folder (hippo-task skill --to <folder>), or have them run `hippo-task guide`."
+        )?;
+        writeln!(
+            out,
+            "    Launch each window with its own identity (HIPPO_ACTOR=agent:<name> HIPPO_NODE=<a name no other window uses>),"
+        )?;
+        writeln!(
+            out,
+            "    and run `hippo-task release --all` from its exit hook."
+        )?;
+        return Ok(());
+    }
+    if wired
+        .agents
+        .iter()
+        .any(|c| c.agent == Agent::Codex && c.hooks_added)
+    {
+        writeln!(
+            out,
+            "  • Codex runs new hooks only once you trust them: in Codex, open /hooks and trust the two hippo-task hooks."
+        )?;
+    }
     writeln!(
         out,
-        "  • Give your agents the skill — they load it only when they work on tasks:"
+        "  • Commit {}, and your teammates' agents are set up too.",
+        changed.join(", ")
     )?;
     writeln!(
         out,
-        "      hippo-task skill --to .claude/skills    (commit it; other agents: their skills folder)"
-    )?;
-    writeln!(
-        out,
-        "    and add this line to the project's AGENTS.md (or CLAUDE.md):"
-    )?;
-    writeln!(
-        out,
-        "      Tasks are coordinated with hippo-task: use its skill, or run `hippo-task guide` if you have none."
-    )?;
-    writeln!(
-        out,
-        "  • Claude Code: give each session its own identity, and its tasks back when it ends — add to .claude/settings.json:"
-    )?;
-    writeln!(out, "      {SESSION_HOOKS}")?;
-    writeln!(
-        out,
-        "  • Other agents: launch each window with its own identity (HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude)"
-    )?;
-    writeln!(
-        out,
-        "    and run `hippo-task release --all` from its exit hook."
+        "  • After upgrading hippo-task, run `hippo-task init` here again: it refreshes the skill."
     )?;
     Ok(())
 }
@@ -1083,6 +1211,8 @@ struct InitView<'a> {
     pointer: bool,
     created: bool,
     git: GitView<'a>,
+    agents: Vec<AgentView<'a>>,
+    instructions: Option<InstructionsView<'a>>,
 }
 
 #[derive(Serialize)]
@@ -1097,8 +1227,22 @@ struct GitView<'a> {
     kept_out: bool,
 }
 
+#[derive(Serialize)]
+struct AgentView<'a> {
+    agent: &'static str,
+    skill: &'a Path,
+    hooks: &'a Path,
+    hooks_added: bool,
+}
+
+#[derive(Serialize)]
+struct InstructionsView<'a> {
+    file: &'a Path,
+    added: bool,
+}
+
 impl<'a> InitView<'a> {
-    fn new(s: &'a Setup) -> Self {
+    fn new(s: &'a Setup, wired: &'a agents::Report) -> Self {
         InitView {
             project: &s.project,
             store: StoreView {
@@ -1111,6 +1255,20 @@ impl<'a> InitView<'a> {
                 repository: s.repository.as_deref(),
                 kept_out: s.kept_out_of_git,
             },
+            agents: wired
+                .agents
+                .iter()
+                .map(|c| AgentView {
+                    agent: c.agent.name(),
+                    skill: &c.skill,
+                    hooks: &c.hooks,
+                    hooks_added: c.hooks_added,
+                })
+                .collect(),
+            instructions: wired.instructions.as_ref().map(|i| InstructionsView {
+                file: &i.file,
+                added: i.added,
+            }),
         }
     }
 }

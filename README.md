@@ -18,7 +18,7 @@ It's the reference implementation of the open agent-native task schema (`docs/sc
 curl -fsSL https://raw.githubusercontent.com/tyherox/hippo-task/main/scripts/install.sh | sh
 ```
 
-It downloads the latest release for your machine, checks its SHA-256, and puts `hippo-task` in `~/.local/bin` — or next to the copy already on your PATH. Run it again to upgrade; `… | HIPPO_VERSION=v0.4.1 sh` installs a specific release. After upgrading, re-run `hippo-task skill --to …` wherever you installed the agent skill, so agents read the new version's protocol.
+It downloads the latest release for your machine, checks its SHA-256, and puts `hippo-task` in `~/.local/bin` — or next to the copy already on your PATH. Run it again to upgrade; `… | HIPPO_VERSION=v0.4.1 sh` installs a specific release. After upgrading, run `hippo-task init` again in each project (and re-run `hippo-task skill --to …` wherever you installed the skill yourself), so agents read the new version's protocol.
 
 **Windows:** download `hippo-task-x86_64-pc-windows-msvc.zip` from the [latest release](https://github.com/tyherox/hippo-task/releases/latest), unzip it, and put `hippo-task.exe` in a folder on your PATH.
 
@@ -28,35 +28,34 @@ Check it worked: `hippo-task --version`. To uninstall, delete the binary; your p
 
 ## Set up a project
 
-Choose once where a project's tasks live — from anywhere inside it:
+From anywhere inside the project:
 
 ```bash
-hippo-task init          # asks: in this project (.hippotask/), or another folder
-hippo-task init --here   # or choose up front: in this project…
-hippo-task init --folder ~/tasks/my-project   # …or in another folder, outside the repository
+hippo-task init
+```
+
+It asks three things: where the tasks live, whether to keep them out of git, and which agents work here (Claude Code, Codex, or both). Then it sets all of it up. For scripts, pass the same choices as flags:
+
+```bash
+hippo-task init --here --agents claude,codex     # tasks in .hippotask/, set up both agents
+hippo-task init --folder ~/tasks/my-project      # tasks in another folder, outside the repository
+hippo-task init --agents codex                   # a project that already has tasks: add an agent
 ```
 
 - **Git:** if the tasks would sit inside a git repository, `init` keeps them out of it by default, with a `.gitignore` inside the store folder. It never edits your repository's own `.gitignore`. Pass `--keep-in-git` to let them be committed — then anyone who can read the repository can read every title and note.
 - **Another folder:** the project keeps a small pointer, `.hippotask/store.json`, which is always kept out of git (it names a path on this machine).
 - **Found from anywhere:** every command looks for the nearest `.hippotask/` in the current folder and the ones above it, never climbing out of a git repository. Without one, commands exit 2 and ask for `hippo-task init` — nothing is ever created by accident.
-- **Agents:** give them the skill, so they don't read a guide every session:
+- **Agents:** for each agent you pick, `init` writes the [Agent Skill](https://agentskills.io) (`hippo-task/SKILL.md` plus `references/json.md`, generated from the installed binary) and adds two session hooks to the agent's own settings. Everything already in those settings stays as it was, and running `init` again changes nothing:
 
-  ```bash
-  hippo-task skill --to .claude/skills      # this project: commit it, and every teammate's agent has it
-  hippo-task skill --to ~/.claude/skills    # or just you, in every project
-  ```
+  | | skill | hooks |
+  |---|---|---|
+  | Claude Code | `.claude/skills/hippo-task/` | `.claude/settings.json` |
+  | Codex | `.agents/skills/hippo-task/` | `.codex/hooks.json` |
 
-  It writes an [Agent Skill](https://agentskills.io) — `hippo-task/SKILL.md` plus `references/json.md` — generated from the installed binary. An agent loads its two-line description at startup and the protocol only when it works on tasks. Codex, Gemini CLI, Copilot, Cursor and others read the same format from their own skills folder: pass that folder to `--to`. Re-run it after upgrading. Then add one line to the project's AGENTS.md — *"Tasks are coordinated with hippo-task: use its skill, or run `hippo-task guide` if you have none."* `hippo-task guide` prints the same protocol.
-- **Identity and session end (Claude Code):** add these hooks to `.claude/settings.json` (commit it, for the whole team) or `~/.claude/settings.json` (you, every project). Each session then acts as `agent:claude` on its own node — `claude-` plus 8 characters of its session id — and gives back what it holds when it ends:
-
-```json
-{ "hooks": {
-  "SessionStart": [ { "hooks": [ { "type": "command", "command": "hippo-task hook session-start" } ] } ],
-  "SessionEnd":   [ { "hooks": [ { "type": "command", "command": "hippo-task hook session-end" } ] } ]
-} }
-```
-
-  A window launched with its own identity (`HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude`) keeps it. The node comes from the random id Claude Code gives each session, not from you or your machine. `session-end` runs on `/exit`, `/clear`, logout and resume — not reliably on a crash or a killed window, which still needs a person to `reclaim`. In a project without tasks, both do nothing. **Other agents:** launch each window with its own identity, and run `hippo-task release --all` from its exit hook.
+  It also adds one line to AGENTS.md (or to CLAUDE.md, when that's the file the project has) for agents that read no skills: *"Tasks are coordinated with hippo-task: use its skill, or run `hippo-task guide` if you have none."* An agent loads the skill's two-line description at startup and the protocol only when it works on tasks. Commit these files and every teammate's agents are set up too. **Codex** runs a project's hooks only after you trust them: open `/hooks` in Codex and trust the two hippo-task hooks.
+- **What the hooks do:** each session acts as its own worker and gives back what it holds when it ends. A Claude Code session is `agent:claude` on `claude-` plus 8 characters of its session id, and gets that identity in its environment. A Codex session is `agent:codex` on `codex-…`. Codex hooks can't set variables, so the session is told its identity in one line when it starts, and the agent puts it in front of each command. A window launched with its own identity (`HIPPO_ACTOR=agent:claude HIPPO_NODE=win-1 claude`) keeps it. The node comes from the random id the agent gives each session, not from you or your machine. Claims go back on a clean end: `/exit`, `/clear`, logout or resume in Claude Code; closing, archiving or 30 idle minutes in Codex. A crash or a killed window still needs a person to `reclaim`. In a project without tasks, the hooks do nothing.
+- **After upgrading** hippo-task, run `hippo-task init` again in each project to refresh its skill.
+- **Other agents, or by hand:** `hippo-task skill --to <skills folder>` writes the skill anywhere: `~/.claude/skills` for you in every project, or another agent's own folder (Gemini CLI, Copilot, Cursor and others read the same format). Re-run it after upgrading. `hippo-task guide` prints the same protocol. Launch each window of an agent without hooks with its own identity, and run `hippo-task release --all` from its exit hook.
 
 ## Use
 
@@ -81,7 +80,7 @@ hippo-task desc 3 --file note.md          # markdown; a local screenshot is copi
 hippo-task desc 3 --base 4 "updated text" # merge with the description as of seq 4
 hippo-task release 3                             # hand it back unfinished: back to todo, free for the next worker
 hippo-task release --all                         # on exit: give back everything this worker holds
-hippo-task hook session-end                      # the same, as a Claude Code hook (see above)
+hippo-task hook session-end                      # the same, as a Claude Code or Codex session hook (see above)
 hippo-task reclaim 3 --reason "window closed"    # a person takes back a stuck worker's task (--from <node>: all of it)
 hippo-task done 3                                # complete (and release)
 ```

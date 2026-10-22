@@ -20,10 +20,13 @@
 //! 10. [`format`] — a team's task conventions, checked after writes (ADR-012).
 //! 11. [`similar`] — ranking tasks by the words they share with a text (ADR-013).
 //!
-//! 12. [`hook`] — Claude Code session hooks: an identity per session (ADR-014).
+//! 12. [`hook`] — Claude Code and Codex session hooks: an identity per session
+//!     (ADR-014, ADR-015).
+//! 13. [`agents`] — what `init` sets up for a project's agents (ADR-015).
 //!
 //! `src/main.rs` is only argument parsing and printing.
 
+pub mod agents;
 pub mod config;
 pub mod error;
 pub mod fold;

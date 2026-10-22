@@ -396,13 +396,13 @@ pub fn write_skill(skills: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
 
 // ------------------------------------------------------------------ helpers
 
-fn say(out: &mut impl Write, text: &str) -> Result<()> {
+pub(crate) fn say(out: &mut impl Write, text: &str) -> Result<()> {
     out.write_all(text.as_bytes())
         .and_then(|()| out.flush())
         .map_err(|e| Error::io("couldn't write the question", e))
 }
 
-fn answer(input: &mut impl BufRead) -> Result<String> {
+pub(crate) fn answer(input: &mut impl BufRead) -> Result<String> {
     let mut line = String::new();
     input
         .read_line(&mut line)

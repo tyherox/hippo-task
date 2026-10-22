@@ -2,6 +2,33 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
+## [Unreleased]
+
+### Added
+
+- `init` sets up the project's agents (ADR-015). At a terminal it asks which
+  agents work here (Claude Code and Codex, Claude Code, Codex, or neither);
+  scripts pass `--agents claude,codex`. Each agent gets the skill
+  (`.claude/skills/` or `.agents/skills/`) and its two session hooks, merged
+  into `.claude/settings.json` or `.codex/hooks.json`. Every other setting
+  and hook is kept, in its order and formatting, and re-running adds nothing.
+  The project's AGENTS.md (or CLAUDE.md) gets the line pointing agents at
+  hippo-task. Nobody edits those files by hand any more. `init --json` adds
+  `agents` and `instructions`.
+- Codex session hooks: `hook session-start --agent codex` tells the session
+  its identity, `agent:codex` on `codex-` plus the last 8 characters of its
+  session id, in one line of context. Codex hooks can't set variables, so
+  the agent puts it in front of each command. `hook session-end --agent
+  codex` gives back what that node holds. Codex session ids start with a
+  clock reading, so the node comes from their random end: two sessions
+  started in the same minute get different nodes.
+
+### Changed
+
+- On a project that already has tasks, `init` needs no `--here`, since it
+  never moves a store. At a terminal it asks only about agents, so running
+  `hippo-task init` again after an upgrade refreshes the skill.
+
 ## [0.7.1] - 2026-10-19 — internal release
 
 ### Added

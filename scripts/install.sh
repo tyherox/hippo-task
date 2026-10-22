@@ -76,4 +76,4 @@ case ":$PATH:" in
     echo "  export PATH=\"$dir:\$PATH\""
     ;;
 esac
-echo "Next, in a project: hippo-task init"
+echo "Next, in a project: hippo-task init (it sets up your agents too)"

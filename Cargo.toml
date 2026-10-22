@@ -21,7 +21,9 @@ doc = false # the lib carries the docs; avoids a lib/bin doc-name collision
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# raw_value: `init` merges hooks into an agent's settings file without
+# reordering or reformatting it (ADR-015).
+serde_json = { version = "1", features = ["raw_value"] }
 ulid = "1"
 chrono = "0.4"
 toml = { version = "1.1.6", default-features = false, features = ["std", "serde", "parse"] }

@@ -57,7 +57,7 @@ impl Ctx {
             // No example name to copy: two agents that copied one would share
             // a node, and be one worker (ADR-014 amendment).
             return Err(Error::Usage(
-                "agents must name their node: set HIPPO_NODE (or --node) to a name unique to this window or session — two agents on one node are one worker, and claims stop keeping them apart. With hippo-task's Claude Code hooks, each session gets its own (see AGENTS.md)".into(),
+                "agents must name their node: set HIPPO_NODE (or --node) to a name unique to this window or session — two agents on one node are one worker, and claims stop keeping them apart. With the session hooks `hippo-task init --agents claude,codex` sets up, each Claude Code or Codex session gets its own (see AGENTS.md)".into(),
             ));
         }
         let node = node.unwrap_or_else(|| "local".to_string());

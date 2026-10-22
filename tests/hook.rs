@@ -1,6 +1,8 @@
-//! Claude Code hooks (ADR-014): `hook session-start` gives each session its
-//! own identity through `$CLAUDE_ENV_FILE`, and `hook session-end` gives back
-//! what that session holds. Both read the hook's JSON on stdin.
+//! Session hooks for Claude Code (ADR-014) and Codex (ADR-015): `hook
+//! session-start` gives each session its own identity (through
+//! `$CLAUDE_ENV_FILE`, or for Codex one line of context), and `hook
+//! session-end` gives back what that session holds. Both read the hook's JSON
+//! on stdin.
 // Tests may panic — that's how a test fails. (Product code may not: see Cargo.toml [lints].)
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -18,8 +20,18 @@ const NODE: &str = "claude-1a2b3c4d";
 /// Run `hippo-task hook <event>` from `cwd` with `stdin`, and only the
 /// environment given: no HIPPO_* settings unless `env` names them.
 fn hook(cwd: &Path, event: &str, stdin: &str, env: &[(&str, &str)]) -> Run {
+    hook_args(cwd, &[event], stdin, env)
+}
+
+/// The same, as Codex runs it: `hippo-task hook <event> --agent codex`.
+fn codex_hook(cwd: &Path, event: &str, stdin: &str, env: &[(&str, &str)]) -> Run {
+    hook_args(cwd, &[event, "--agent", "codex"], stdin, env)
+}
+
+fn hook_args(cwd: &Path, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Run {
     let mut cmd = bare();
-    cmd.args(["hook", event])
+    cmd.arg("hook")
+        .args(args)
         .current_dir(cwd)
         .env_remove("CLAUDE_ENV_FILE")
         .stdin(Stdio::piped())
@@ -243,6 +255,163 @@ fn a_session_claims_under_its_own_node_and_gives_it_back_at_the_end() {
         Some(format!("agent:claude@{NODE}").as_str())
     );
     let run = hook(dir.path(), "session-end", SESSION, &[]);
+    assert_eq!(run.code, 0, "{run:#?}");
+    assert_eq!(holder(dir.path(), "1"), None);
+}
+
+// ---- Codex (ADR-015) ----
+//
+// Codex has no env file: its SessionStart hook's stdout becomes the agent's
+// context, so the start hook *tells* the session its identity. Codex session
+// ids are UUIDv7 — time first — so the node is drawn from their random tail.
+
+const CODEX_SESSION: &str = r#"{"session_id":"01a1363f-0a73-7180-ad3c-fbdddacabf3f","hook_event_name":"SessionStart","source":"startup","model":"gpt-5"}"#;
+const CODEX_NODE: &str = "codex-dacabf3f";
+/// Started in the same minute: the same first 8 characters.
+const CODEX_NEIGHBOUR: &str = r#"{"session_id":"01a1363f-1b22-7d41-9e01-0c4f5a6b7c8d","hook_event_name":"SessionStart","source":"startup"}"#;
+
+#[test]
+fn codex_session_start_tells_the_agent_its_identity() {
+    let dir = project("hook-codex-start");
+    let run = codex_hook(dir.path(), "session-start", CODEX_SESSION, &[]);
+    assert_eq!(run.code, 0, "{run:#?}");
+    assert!(
+        run.stdout
+            .contains(&format!("HIPPO_ACTOR=agent:codex HIPPO_NODE={CODEX_NODE}")),
+        "{run:#?}"
+    );
+    assert_eq!(
+        run.stdout.lines().count(),
+        1,
+        "one line of context: {run:#?}"
+    );
+    // --json changes nothing: the line is for Codex, which reads plain text.
+    let json = hook_args(
+        dir.path(),
+        &["session-start", "--agent", "codex", "--json"],
+        CODEX_SESSION,
+        &[],
+    );
+    assert_eq!(json.stdout, run.stdout, "{json:#?}");
+}
+
+#[test]
+fn codex_sessions_started_together_get_different_nodes() {
+    let dir = project("hook-codex-neighbours");
+    let first = codex_hook(dir.path(), "session-start", CODEX_SESSION, &[]);
+    let second = codex_hook(dir.path(), "session-start", CODEX_NEIGHBOUR, &[]);
+    assert!(
+        second.stdout.contains("HIPPO_NODE=codex-5a6b7c8d"),
+        "{second:#?}"
+    );
+    assert_ne!(first.stdout, second.stdout);
+}
+
+#[test]
+fn codex_session_start_is_quiet_when_there_is_nothing_to_say() {
+    // A project without tasks: no context spent on hippo-task.
+    let plain = TempDir::new("hook-codex-plain");
+    fs::create_dir(plain.path().join(".git")).unwrap();
+    let run = codex_hook(plain.path(), "session-start", CODEX_SESSION, &[]);
+    assert_eq!(run.code, 0, "{run:#?}");
+    assert_eq!(run.stdout, "", "{run:#?}");
+    assert!(!plain.path().join(".hippotask").exists());
+
+    // Launched with an identity: every shell already has it.
+    let dir = project("hook-codex-launched");
+    let run = codex_hook(
+        dir.path(),
+        "session-start",
+        CODEX_SESSION,
+        &[("HIPPO_ACTOR", "agent:codex"), ("HIPPO_NODE", "qa-7")],
+    );
+    assert_eq!(run.code, 0, "{run:#?}");
+    assert_eq!(run.stdout, "", "{run:#?}");
+
+    // Launched with only an actor: the node is filled in, the actor kept.
+    let run = codex_hook(
+        dir.path(),
+        "session-start",
+        CODEX_SESSION,
+        &[("HIPPO_ACTOR", "agent:reviewer")],
+    );
+    assert!(
+        run.stdout.contains("agent:reviewer")
+            && run.stdout.contains(&format!("HIPPO_NODE={CODEX_NODE}")),
+        "{run:#?}"
+    );
+}
+
+#[test]
+fn codex_session_start_finds_the_store_from_the_sessions_folder() {
+    let dir = project("hook-codex-cwd");
+    let elsewhere = TempDir::new("hook-codex-elsewhere");
+    let input = format!(
+        r#"{{"session_id":"01a1363f-0a73-7180-ad3c-fbdddacabf3f","cwd":{}}}"#,
+        serde_json::to_string(dir.path().to_str().unwrap()).unwrap()
+    );
+    let run = codex_hook(elsewhere.path(), "session-start", &input, &[]);
+    assert!(run.stdout.contains(CODEX_NODE), "{run:#?}");
+}
+
+#[test]
+fn codex_session_end_gives_back_what_this_session_holds_and_nothing_else() {
+    let dir = project("hook-codex-end");
+    ok(dir.path(), ("agent:codex", CODEX_NODE), &["start", "1"]);
+    ok(
+        dir.path(),
+        ("agent:codex", "codex-5a6b7c8d"),
+        &["start", "2"],
+    );
+    let run = codex_hook(dir.path(), "session-end", CODEX_SESSION, &[]);
+    assert_eq!(run.code, 0, "{run:#?}");
+    assert_eq!(run.stdout, "", "{run:#?}");
+    assert_eq!(holder(dir.path(), "1"), None);
+    assert_eq!(
+        holder(dir.path(), "2").as_deref(),
+        Some("agent:codex@codex-5a6b7c8d"),
+        "the session started in the same minute keeps its claim"
+    );
+}
+
+/// The whole round trip, the way a Codex agent does it: read the start
+/// line, put the identity in front of a command, and the end hook gives the
+/// work back.
+#[cfg(unix)]
+#[test]
+fn a_codex_session_claims_under_the_identity_it_was_told() {
+    let dir = project("hook-codex-round-trip");
+    let told = codex_hook(dir.path(), "session-start", CODEX_SESSION, &[]);
+    let prefix = told
+        .stdout
+        .split_whitespace()
+        .filter(|word| word.starts_with("HIPPO_ACTOR=") || word.starts_with("HIPPO_NODE="))
+        .map(|word| word.trim_end_matches(['.', ',', ';']))
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(
+        prefix,
+        format!("HIPPO_ACTOR=agent:codex HIPPO_NODE={CODEX_NODE}"),
+        "{told:#?}"
+    );
+    let shell = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "{prefix} '{}' start 1 --json",
+            env!("CARGO_BIN_EXE_hippo-task")
+        ))
+        .current_dir(dir.path())
+        .env_remove("HIPPO_ACTOR")
+        .env_remove("HIPPO_NODE")
+        .env_remove("HIPPO_DIR")
+        .output()
+        .unwrap();
+    assert!(shell.status.success(), "{shell:#?}");
+    assert_eq!(
+        holder(dir.path(), "1").as_deref(),
+        Some(format!("agent:codex@{CODEX_NODE}").as_str())
+    );
+    let run = codex_hook(dir.path(), "session-end", CODEX_SESSION, &[]);
     assert_eq!(run.code, 0, "{run:#?}");
     assert_eq!(holder(dir.path(), "1"), None);
 }
