@@ -2,7 +2,7 @@
 
 Notable changes to HippoTask (`hippo-task`). Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (while 0.x, a minor bump may break things — it will say so here).
 
-## [Unreleased]
+## [0.7.2] - 2026-10-22 — internal release
 
 ### Added
 

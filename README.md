@@ -6,7 +6,7 @@
 
 It's the reference implementation of the open agent-native task schema (`docs/schema-design.md`).
 
-**Status: 0.7.1 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
+**Status: 0.7.2 — internal release** (one machine, one human, many agents). What changed: `CHANGELOG.md`. Agents: read `AGENTS.md`.
 
 *History:* HippoTask started as a TypeScript prototype of a universal interop schema with platform adapters — preserved at git tag `v0-typescript`, with its research (the 10-platform schema study, provider scorecards) in `docs/archive/typescript-v0/`. This Rust core narrows the first release to local, multi-agent task memory; platform adapters come back once sync is earned.
 
